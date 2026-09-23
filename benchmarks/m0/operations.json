@@ -1,0 +1,37 @@
+{
+  "operations": [
+    {
+      "operation_id": "createOrder",
+      "method": "POST",
+      "path": "/orders",
+      "request_schema": {
+        "type": "object",
+        "required": ["product_id", "quantity", "total_amount", "discount_amount", "start_time", "end_time", "payment_method"],
+        "properties": {
+          "product_id": {"type": "integer", "minimum": 1, "example": 101},
+          "quantity": {"type": "integer", "minimum": 1, "maximum": 100},
+          "total_amount": {"type": "number", "minimum": 0, "example": 100},
+          "discount_amount": {"type": "number", "minimum": 0, "example": 10},
+          "start_time": {"type": "string", "format": "date-time"},
+          "end_time": {"type": "string", "format": "date-time"},
+          "payment_method": {"type": "string", "enum": ["cash", "card"]},
+          "card_token": {"type": "string", "example": "tok_m0_valid"},
+          "note": {"type": "string", "maxLength": 50}
+        }
+      }
+    },
+    {
+      "operation_id": "createUser",
+      "method": "POST",
+      "path": "/users",
+      "request_schema": {
+        "type": "object",
+        "required": ["name", "email"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "example": "M0 User"},
+          "email": {"type": "string", "format": "email", "example": "m0@example.test"}
+        }
+      }
+    }
+  ]
+}

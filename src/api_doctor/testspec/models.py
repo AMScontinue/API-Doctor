@@ -1,0 +1,146 @@
+"""Typed contracts for semantic TestSpec compilation and execution."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+JsonValue = Any
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SetValue(StrictModel):
+    kind: Literal["set_value"]
+    path: str
+    value: JsonValue
+
+
+class OmitField(StrictModel):
+    kind: Literal["omit_field"]
+    path: str
+
+
+class Boundary(StrictModel):
+    kind: Literal["boundary"]
+    path: str
+    position: Literal["below_minimum", "at_minimum", "above_maximum", "at_maximum"]
+
+
+class Delta(StrictModel):
+    value: int | float = Field(gt=0)
+    unit: Literal["number", "second", "minute", "hour", "day"] = "number"
+
+
+class FieldRelation(StrictModel):
+    kind: Literal["field_relation"]
+    left: str
+    operator: Literal["lt", "lte", "eq", "ne", "gte", "gt"]
+    right: str
+    delta: Delta = Field(default_factory=lambda: Delta(value=1))
+
+
+Mutation = Annotated[
+    SetValue | OmitField | Boundary | FieldRelation,
+    Field(discriminator="kind"),
+]
+
+
+class Expected(StrictModel):
+    status_codes: list[int] = Field(min_length=1)
+
+
+class Source(StrictModel):
+    kind: Literal["openapi", "business_rule", "heuristic"]
+    id: str
+
+
+class SemanticTestCandidate(StrictModel):
+    rule_id: str
+    status: Literal["compilable", "not_compilable"]
+    operation_id: str | None = None
+    purpose: str
+    mutations: list[Mutation] = Field(default_factory=list)
+    expected: Expected | None = None
+    source: Source
+    unsupported_reason: str | None = None
+
+    @model_validator(mode="after")
+    def check_status_payload(self) -> "SemanticTestCandidate":
+        if self.status == "compilable":
+            if not self.operation_id or not self.mutations or self.expected is None:
+                raise ValueError("compilable candidate requires operation_id, mutations, and expected")
+            if self.unsupported_reason:
+                raise ValueError("compilable candidate cannot include unsupported_reason")
+        elif not self.unsupported_reason:
+            raise ValueError("not_compilable candidate requires unsupported_reason")
+        return self
+
+
+class Operation(StrictModel):
+    operation_id: str
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+    path: str
+    request_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class Assertion(StrictModel):
+    kind: Literal["status_in"] = "status_in"
+    allowed: list[int]
+    source: str
+    evidence_ref: str
+
+
+class CompiledTestCase(StrictModel):
+    case_id: str
+    rule_id: str
+    operation_id: str
+    method: str
+    path: str
+    purpose: str
+    body: dict[str, JsonValue]
+    assertions: list[Assertion]
+    seed: int
+    time_anchor: datetime
+
+
+class TestResult(StrictModel):
+    case_id: str
+    outcome: Literal["passed", "failed", "error"]
+    actual_status: int | None
+    expected_statuses: list[int]
+    response_body: JsonValue = None
+    error: str | None = None
+
+
+class RuleRecord(StrictModel):
+    id: str
+    operation_id: str | None = None
+    description: str
+    expected_status_codes: list[int] | None = None
+
+
+class SpikeMetrics(StrictModel):
+    mode: str
+    total_rules: int
+    structured_successes: int
+    compilable_candidates: int
+    compiled_cases: int
+    executed_cases: int
+    passed_cases: int
+    failed_cases: int
+    rejected_rules: int
+    invalid_reference_count: int
+
+    def ratios(self) -> dict[str, float]:
+        denominator = self.total_rules or 1
+        return {
+            "structured_success_rate": self.structured_successes / denominator,
+            "compile_rate": self.compiled_cases / denominator,
+            "rejection_rate": self.rejected_rules / denominator,
+        }

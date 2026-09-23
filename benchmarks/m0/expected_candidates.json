@@ -1,0 +1,109 @@
+[
+  {
+    "rule_id": "order-time-range",
+    "status": "compilable",
+    "operation_id": "createOrder",
+    "purpose": "验证结束时间早于开始时间时服务拒绝请求",
+    "mutations": [
+      {"kind": "field_relation", "left": "$.end_time", "operator": "lt", "right": "$.start_time", "delta": {"value": 1, "unit": "hour"}}
+    ],
+    "expected": {"status_codes": [422]},
+    "source": {"kind": "business_rule", "id": "order-time-range"}
+  },
+  {
+    "rule_id": "discount-not-over-total",
+    "status": "compilable",
+    "operation_id": "createOrder",
+    "purpose": "验证折扣大于总金额时服务拒绝请求",
+    "mutations": [
+      {"kind": "field_relation", "left": "$.discount_amount", "operator": "gt", "right": "$.total_amount", "delta": {"value": 1, "unit": "number"}}
+    ],
+    "expected": {"status_codes": [422]},
+    "source": {"kind": "business_rule", "id": "discount-not-over-total"}
+  },
+  {
+    "rule_id": "card-token-required",
+    "status": "compilable",
+    "operation_id": "createOrder",
+    "purpose": "验证银行卡支付缺少 card_token 时服务拒绝请求",
+    "mutations": [
+      {"kind": "set_value", "path": "$.payment_method", "value": "card"},
+      {"kind": "omit_field", "path": "$.card_token"}
+    ],
+    "expected": {"status_codes": [422]},
+    "source": {"kind": "business_rule", "id": "card-token-required"}
+  },
+  {
+    "rule_id": "quantity-positive",
+    "status": "compilable",
+    "operation_id": "createOrder",
+    "purpose": "验证 quantity 低于最小值时服务拒绝请求",
+    "mutations": [
+      {"kind": "boundary", "path": "$.quantity", "position": "below_minimum"}
+    ],
+    "expected": {"status_codes": [422]},
+    "source": {"kind": "business_rule", "id": "quantity-positive"}
+  },
+  {
+    "rule_id": "user-email-required",
+    "status": "compilable",
+    "operation_id": "createUser",
+    "purpose": "验证缺少 email 时服务拒绝创建用户",
+    "mutations": [
+      {"kind": "omit_field", "path": "$.email"}
+    ],
+    "expected": {"status_codes": [422]},
+    "source": {"kind": "business_rule", "id": "user-email-required"}
+  },
+  {
+    "rule_id": "unsupported-create-query",
+    "status": "not_compilable",
+    "operation_id": null,
+    "purpose": "验证创建后查询",
+    "mutations": [],
+    "expected": null,
+    "source": {"kind": "business_rule", "id": "unsupported-create-query"},
+    "unsupported_reason": "M0 IR 尚不支持 workflow 和响应变量绑定"
+  },
+  {
+    "rule_id": "unsupported-cancel-pay",
+    "status": "not_compilable",
+    "operation_id": null,
+    "purpose": "验证取消后不可支付",
+    "mutations": [],
+    "expected": null,
+    "source": {"kind": "business_rule", "id": "unsupported-cancel-pay"},
+    "unsupported_reason": "M0 catalog 没有取消和支付 operation，且 IR 尚不支持状态序列"
+  },
+  {
+    "rule_id": "unsupported-idempotency",
+    "status": "not_compilable",
+    "operation_id": "createOrder",
+    "purpose": "验证幂等创建",
+    "mutations": [],
+    "expected": null,
+    "source": {"kind": "business_rule", "id": "unsupported-idempotency"},
+    "unsupported_reason": "M0 IR 尚不支持 repeat_request 和跨响应比较"
+  },
+  {
+    "rule_id": "invalid-field-reference",
+    "status": "compilable",
+    "operation_id": "createOrder",
+    "purpose": "验证不存在字段引用会被编译器拒绝",
+    "mutations": [
+      {"kind": "boundary", "path": "$.legacy_code", "position": "below_minimum"}
+    ],
+    "expected": {"status_codes": [422]},
+    "source": {"kind": "business_rule", "id": "invalid-field-reference"}
+  },
+  {
+    "rule_id": "ambiguous-risk-review",
+    "status": "not_compilable",
+    "operation_id": "createOrder",
+    "purpose": "识别不可自动测试的模糊规则",
+    "mutations": [],
+    "expected": null,
+    "source": {"kind": "business_rule", "id": "ambiguous-risk-review"},
+    "unsupported_reason": "高风险、大额和适当审核都没有可观察的字段、阈值或期望状态"
+  }
+]
