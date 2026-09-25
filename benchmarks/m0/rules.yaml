@@ -7,9 +7,9 @@ rules:
     operation_id: createOrder
     description: 折扣金额不得大于订单总金额；违反时返回 422。
     expected_status_codes: [422]
-  - id: card-token-required
+  - id: cash-card-token-forbidden
     operation_id: createOrder
-    description: payment_method 为 card 时 card_token 必填；缺失时返回 422。
+    description: payment_method 为 cash 时不得提交 card_token；提交时返回 422。
     expected_status_codes: [422]
   - id: quantity-positive
     operation_id: createOrder

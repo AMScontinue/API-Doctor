@@ -44,7 +44,7 @@ func createOrder(w http.ResponseWriter, r *http.Request) {
 	invalid := request.ProductID < 1 || request.Quantity < 1 || request.Quantity > 100 ||
 		request.TotalAmount < 0 || request.DiscountAmount < 0 || request.DiscountAmount > request.TotalAmount ||
 		startErr != nil || endErr != nil || !end.After(start) ||
-		(request.PaymentMethod == "card" && request.CardToken == "")
+		(request.PaymentMethod == "cash" && request.CardToken != "")
 	if invalid {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "business rule violation"})
 		return

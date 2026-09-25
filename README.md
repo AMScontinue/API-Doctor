@@ -2,7 +2,7 @@
 
 API Doctor 是一个面向 OpenAPI 3.x 服务的自主接口测试与故障分析 Agent。它结合确定性 Schema 测试与 DeepSeek 语义分析，通过受控 HTTP 工具执行测试，根据真实响应追加诊断实验，并输出证据、复现步骤和 pytest 回归用例。
 
-当前已完成 M0 TestSpec 技术验证的确定性链路：结构化候选校验、有限 IR 编译、非法引用拒绝和真实 HTTP 执行。DeepSeek 实时抽取入口已经实现，但需要在本项目配置 API Key 后才能记录真实模型指标。
+当前已完成 M0 TestSpec 技术验证：确定性链路支持结构化候选与上下文校验、有限 IR 编译、非法引用拒绝和真实 HTTP 执行；DeepSeek 在不包含具体组合答案的当前 10 条小样本上返回 10/10 合法结构，5/5 条支持范围内规则成功编译，5 条能力外、非法或模糊规则被拒绝。该结果只用于技术验证，不代表产品准确率。
 
 ## 核心设计
 
@@ -61,3 +61,37 @@ go run .
 ```
 
 在 shell 中设置 `DEEPSEEK_API_KEY` 后，可把 `--mode fixture` 改为 `--mode deepseek`。实时模式的模型结果必须单独记录，不能与 fixture 指标混用。
+
+运行与 Prompt 示例隔离的 M0 held-out 评测：
+
+```bash
+.venv/bin/api-doctor-m0 \
+  --mode deepseek \
+  --benchmark-dir benchmarks/m0/heldout \
+  --log-level WARNING \
+  --output runs/m0/heldout-result.json
+
+jq '{metrics, ratios}' runs/m0/heldout-result.json
+```
+
+held-out 的 `expected_outcomes.json` 只供本地评测器评分，不会发送给模型。评分不仅比较 `compilable/not_compilable`，还核对关键 mutation，防止把“可以编译但测试语义错误”的候选算作成功。
+
+### 查看 LLM 输入输出
+
+M0 的 `INFO` 默认只显示精简后的 DeepSeek 输入/输出和最终聚合结果。普通解析、fixture、编译、HTTP 与单规则过程只在 `DEBUG` 显示。模型输出未通过 Pydantic 时，日志会显示失败输出以及一次 `structure_repair` 输入输出：
+
+```bash
+.venv/bin/api-doctor-m0 \
+  --mode deepseek \
+  --base-url http://127.0.0.1:18080 \
+  --log-level INFO \
+  --output runs/m0/deepseek-result.json
+```
+
+只有排查解析、编译或 HTTP 内部过程时才使用 `--log-level DEBUG`。
+
+核心标签是 `[LLM INPUT]`、`[LLM OUTPUT]` 和 `[RESULT]`，其中 `attempt=initial|structure_repair` 区分首次抽取和结构修复。`not_compilable` 自检当前已关闭。
+
+日志不会输出 DeepSeek API Key，常见 password、secret、token、Authorization 和 Cookie 字段会被替换为 `***REDACTED***`。
+
+`benchmarks/m0/compiler_fixtures.json` 只用于开发测试“候选已经得到以后”的确定性链路，并故意包含非法候选来验证拒绝行为。真实用户不提供也不读取这个文件；真实模式的用户输入是 OpenAPI 文档和可选的 `rules.yaml`，语义候选由 DeepSeek 生成。

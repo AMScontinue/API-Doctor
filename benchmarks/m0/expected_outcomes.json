@@ -1,0 +1,12 @@
+{
+  "order-time-range": "compilable",
+  "discount-not-over-total": "compilable",
+  "cash-card-token-forbidden": "compilable",
+  "quantity-positive": "compilable",
+  "user-email-required": "compilable",
+  "unsupported-create-query": "not_compilable",
+  "unsupported-cancel-pay": "not_compilable",
+  "unsupported-idempotency": "not_compilable",
+  "invalid-field-reference": "not_compilable",
+  "ambiguous-risk-review": "not_compilable"
+}

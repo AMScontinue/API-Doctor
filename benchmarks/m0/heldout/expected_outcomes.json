@@ -1,0 +1,64 @@
+{
+  "booking-time-order-paraphrase": {
+    "status": "compilable",
+    "required_mutations": [
+      {"kind": "field_relation", "left": "$.finish_at", "operator": "lt", "right": "$.start_at"}
+    ]
+  },
+  "attendees-positive-paraphrase": {
+    "status": "compilable",
+    "required_mutations": [
+      {"kind": "boundary", "path": "$.attendees", "position": "below_minimum"}
+    ]
+  },
+  "booking-title-required": {
+    "status": "compilable",
+    "required_mutations": [{"kind": "omit_field", "path": "$.title"}]
+  },
+  "online-meeting-url-required": {
+    "status": "compilable",
+    "required_mutations": [
+      {"kind": "set_value", "path": "$.delivery_mode", "value": "online"},
+      {"kind": "omit_field", "path": "$.meeting_url"}
+    ]
+  },
+  "onsite-room-required": {
+    "status": "compilable",
+    "required_mutations": [
+      {"kind": "set_value", "path": "$.delivery_mode", "value": "onsite"},
+      {"kind": "omit_field", "path": "$.room_code"}
+    ]
+  },
+  "sms-phone-required": {
+    "status": "compilable",
+    "required_mutations": [
+      {"kind": "set_value", "path": "$.channel", "value": "sms"},
+      {"kind": "omit_field", "path": "$.phone_number"}
+    ]
+  },
+  "email-phone-forbidden": {
+    "status": "compilable",
+    "required_mutations": [
+      {"kind": "set_value", "path": "$.channel", "value": "email"},
+      {"kind": "set_value", "path": "$.phone_number"}
+    ]
+  },
+  "discount-not-greater-than-subtotal": {
+    "status": "compilable",
+    "mutation_alternatives": [
+      [{"kind": "field_relation", "left": "$.discount", "operator": "gt", "right": "$.subtotal"}],
+      [
+        {"kind": "set_value", "path": "$.subtotal", "value": 100},
+        {"kind": "set_value", "path": "$.discount", "value": 150}
+      ]
+    ]
+  },
+  "unsupported-booking-roundtrip": {"status": "not_compilable"},
+  "unsupported-retry-header": {"status": "not_compilable"},
+  "unknown-booking-field": {"status": "not_compilable"},
+  "unknown-operation": {"status": "not_compilable"},
+  "missing-status-oracle": {"status": "not_compilable"},
+  "ambiguous-premium-treatment": {"status": "not_compilable"},
+  "nested-city-required": {"status": "not_compilable"},
+  "unsupported-external-credit-check": {"status": "not_compilable"}
+}

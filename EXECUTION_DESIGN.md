@@ -296,6 +296,22 @@ end_time = anchor - 1 hour
 2. LLM 可以在 DSL 无法直接构造普通业务值时提议具体值，但必须通过 Schema 和 DSL 关系校验；
 3. 无法机器验证的值或关系不执行，进入报告的规格歧义/人工补充清单。
 
+### 4.3.1 两条候选生成路径如何合并
+
+Schema 规则引擎与 LLM 语义提取器都输出统一的 `SemanticTestCandidate`，但二者不是简单地“全部执行”。候选进入执行队列前依次经过：
+
+1. **上下文校验**：确认 `rule_id`、证据引用、operationId、字段路径及 expected 与原始 OpenAPI/业务规则一致，防止模型把一条规则错误绑定到另一接口或篡改预期；
+2. **规范化**：统一 JSONPath、状态码集合、mutation 顺序和默认值表示；
+3. **指纹与去重**：根据 operationId、请求位置、mutation 和 assertion 生成稳定指纹；
+4. **来源合并**：如果 Schema 路径和语义路径生成等价用例，只保留一个候选，但同时记录 `contract`、`user_rule`、`llm_inference` 等全部 provenance；
+5. **冲突检测**：如果两个来源对同一场景给出不同期望，不自动任选一个，而是标记为规格冲突并请求人工确认；
+6. **依赖、风险与价值评估**：分析前置接口、变量生产者、副作用、是否需审批，以及在剩余预算内的信息价值；
+7. **选择执行集**：保留全部候选及其处理决定用于审计，只把通过校验且优先级足够的候选编译、执行。
+
+例如，OpenAPI 的 `required: [email]` 与业务规则“创建用户时 email 必填”会产生等价的 `omit_field($.email)`。系统应合并为一个测试，并保留两个断言来源，而不是发送两次相同请求。
+
+候选融合是确定性代码职责。LLM 可以提供语义候选、依赖建议和优先级理由，但不能决定跳过校验、覆盖来源冲突或突破执行预算。
+
 ### 4.4 第 3 步：首次规划
 
 这是第一次调用 LLM。输入不是整个 OpenAPI，而是：
@@ -673,6 +689,14 @@ finalize_report_and_regression_tests(state)
 
 ## 9. 状态与 Memory
 
+本项目中的 memory 不是为了贴 Agent 标签而增加向量数据库，而是为决策闭环保存“下一步真正需要的状态”。分为三层：
+
+- **Working Memory（MVP/M2）**：单次运行内的计划、候选、变量、观察、假设、预算和审批状态，由 LangGraph state 或等价状态机管理；
+- **Episodic Memory（MVP/M2）**：本次运行的 checkpoint、轨迹、请求证据和报告，支持崩溃恢复、人工审计及按 `run_id` 恢复；
+- **Long-term Semantic Memory（后续候选）**：跨运行复用已确认的接口依赖、稳定数据构造经验和故障模式。每条记忆必须绑定服务身份、OpenAPI 指纹、来源、置信度、创建时间和失效条件，且默认不自动写入下一次决策上下文。
+
+LLM 上下文不等于完整 memory。上下文构建器只选择当前节点需要的 operation 摘要、最近观察、活跃假设、相关变量和剩余预算；大响应与旧轨迹只保存引用和摘要，避免上下文无限增长。
+
 ### 9.1 单次运行状态
 
 ```python
@@ -689,6 +713,9 @@ class AgentState(TypedDict):
     remaining_test_budget: int
     remaining_step_budget: int
     duplicate_fingerprints: set[str]
+    blocked_branches: list[BlockedBranch]
+    pending_approval: ApprovalRequest | None
+    active_context_refs: list[EvidenceRef]
     auth_context: AuthContext
     final_report: dict | None
 ```
@@ -711,6 +738,25 @@ runs/<run_id>/
 ### 9.3 长期 Memory
 
 MVP 不做跨运行的自动经验记忆。运行历史保留为文件，但不会未经审核自动注入下一次运行。后续若增加长期记忆，必须绑定服务、OpenAPI 指纹、来源、时间和失效条件。
+
+### 9.4 Checkpoint、恢复与遗忘
+
+- 每次工具执行后保存 checkpoint；恢复时不得重复发送已经完成的有副作用请求；
+- checkpoint 保存 plan version、请求指纹、变量来源、预算消耗和待审批动作；
+- “开始新运行”默认创建新的 Working Memory，不等于删除历史运行产物；
+- 用户可手动删除或归档某个 run，这与手动调用 Go 服务 `/test/reset` 是两件独立的事；
+- 长期记忆若以后启用，需要显式确认或满足可信写入策略，不能把一次模型猜测永久化。
+
+### 9.5 Agent 化能力的实现优先级
+
+以下能力作为 M2/M3 讨论时的候选清单，不表示全部都必须进入第一版：
+
+1. **必须实现**：显式状态图、结构化 tool call、Working Memory、硬预算和终止条件、局部 replan、checkpoint/trajectory、人工审批、规则式回退；
+2. **强烈建议**：上下文裁剪、错误恢复、变量血缘、假设的支持/反对证据、Agent 与确定性 baseline 对照评测；
+3. **后续可选**：跨运行长期记忆、MCP 封装、历史故障 RAG；
+4. **暂不建议为展示而加入**：多 Agent、无明确语料来源的向量库、让模型任意生成并执行代码。
+
+简历展示的重点不是使用了多少 Agent 名词，而是能展示一次可审计闭环：模型基于真实观察选择诊断动作，宿主代码验证并执行工具，结果写回状态，触发局部重规划，最终在预算内停止。
 
 ## 10. DeepSeek 与 LangChain/LangGraph
 
@@ -1075,7 +1121,7 @@ api-test-agent/
 │       ├── generation/
 │       │   ├── schema_candidates.py
 │       │   ├── semantic_extractor.py
-│       │   └── prompts/
+│       │   └── semantic_prompt.py
 │       ├── execution/
 │       │   ├── http.py
 │       │   ├── auth.py
@@ -1097,6 +1143,7 @@ api-test-agent/
 │       │   ├── gateway.py
 │       │   └── deepseek.py
 │       └── evaluation/
+│           ├── models.py
 │           └── runner.py
 ├── examples/
 │   └── buggy-shop/
@@ -1109,7 +1156,7 @@ api-test-agent/
 │   └── m0/
 │       ├── operations.json
 │       ├── rules.yaml
-│       └── expected_candidates.json
+│       └── compiler_fixtures.json
 ├── tests/
 │   ├── unit/
 │   ├── integration/
@@ -1149,8 +1196,22 @@ M0 当前实现状态（2026-09-24）：
 - 已实现 DeepSeek JSON Output 抽取入口以及独立 fixture 抽取器；
 - 已实现最小 Go HTTP 服务，并以 fixture 候选完成真实 HTTP 验证；
 - 实际 fixture 结果：10/10 通过结构校验，6 条声明可编译，5 条成功编译并执行，5/5 HTTP 结果符合预期，1 条非法字段引用被拒绝，4 条能力外规则被明确拒绝；
-- Python 测试实际结果：5 passed；Go 编译测试通过；
-- 尚未记录 DeepSeek 实时生成指标：当前项目环境未配置 `DEEPSEEK_API_KEY`，fixture 结果不得作为模型成功率。
+- M0 收尾重构后的 Python 测试实际结果：15 passed；离线 fixture 编译指标符合预期；Go 编译测试通过；
+- 已完成 DeepSeek 实时抽取验证：加强 JSONPath Schema 后，10/10 规则返回合法结构，4 条成功编译；5 条确实不可执行、非法或模糊的规则均被正确拒绝；模型额外保守拒绝了 1 条可由 `set_value + omit_field` 表达的条件必填规则，因此可执行语义规则召回为 4/5（80%）。这是当前小样本技术验证结果，不外推为产品准确率。
+- DeepSeek 少编译的具体规则是 `card-token-required`：“`payment_method` 为 `card` 时 `card_token` 必填”。人工 fixture 将其表示为先执行 `set_value($.payment_method, "card")`，再执行 `omit_field($.card_token)`；DeepSeek 却认为现有 mutation 无法表达条件依赖并返回 `not_compilable`。这说明当前短板是模型没有理解“多个原子 mutation 可以组合成一个条件场景”，不是编译器缺少执行能力。后续优先通过 prompt 中加入组合示例、few-shot 和一次针对 `unsupported_reason` 的自检/修复提高召回；最终仍由编译器验证组合后的请求确实满足前件并违反后件。
+- M0 随后加入 mutation 可组合说明、条件必填 few-shot，以及模型首次返回 `not_compilable` 时的一次结构化自检。自检最多一次，不形成无界 LLM 循环；其输出仍须经过同一 Pydantic 与编译器校验。新的真实模型结果需重新运行后记录，不能用实现预期替代实测数据。
+- 改进后的第三次 DeepSeek 实测结果：10/10 输出通过结构校验，5/5 条支持范围内规则全部成功编译，另外 5 条能力外、非法字段或语义模糊规则全部继续返回 `not_compilable`，没有误接受。本次仍为 compile-only，未发送 HTTP。`card-token-required` 在首次调用就正确生成 `set_value + omit_field`，因此本轮改善直接来自组合说明/few-shot；一次自检只对其余 5 条拒绝规则触发并维持原判断。自检提高保守决策的可复核性，但增加模型调用与时延，后续评测应单独记录初次召回、修复召回、误接受率和额外 token/时延。
+- 第三次实验随后被认定存在评测泄漏：Prompt 直接给出了 `card-token-required` 的 mutation 组合，不能证明模型具备迁移能力。因此正式基准移除该具体 few-shot，并把规则替换为方向相反的新场景 `cash-card-token-forbidden`：“现金支付时主动提交 card_token 应返回 422”。Prompt 只保留“多个原子 mutation 可共同建立前置条件并构造违反”的抽象说明。
+- 无直接答案的第四次 DeepSeek 实测中，新规则首次调用便自行生成 `set_value($.payment_method, "cash") + set_value($.card_token, <value>)`。整体结果仍为 10/10 结构合法、5/5 支持规则成功编译、5/5 不支持规则正确拒绝、0 误接受、0 误拒绝；compile-only 总计 15 次模型调用、5 次自检、0 次自检修复、模型调用耗时 17,266 ms。新的 fixture HTTP 验证为 5/5 通过。该单次小样本说明抽象组合提示具有初步迁移效果，但仍不能外推为稳定准确率。
+- 已增加 Candidate Context Validator，确定性校验 `rule_id`、source、operationId、expected 状态码和字段路径没有偏离输入；结构合法但上下文不忠实的模型结果不会进入编译器。
+- M0 评测分别记录正确接受/拒绝、误接受/拒绝和语义匹配；模型用量独立记录调用数、耗时、prompt/completion token 与结构修复次数。已删除关闭自检后失去意义的首次状态、自检次数和自检修复字段。
+- M0 增加了独立 held-out 集合：3 个虚构 operation、16 条未出现在 Prompt 示例中的规则，按 8 条支持范围内和 8 条应拒绝规则平衡。覆盖中英文改写、日期/数字关系、必填字段、2 个 mutation 组合、相似联系方式字段、跨接口、请求头幂等、未知字段、未知 operation、缺少 expected oracle、嵌套路径、模糊概念和外部系统依赖。`expected_outcomes.json` 不进入模型上下文，并核对关键 mutation，而不只核对候选状态。
+- held-out 初次运行暴露并修复了三项问题：日期字段错误使用 `delta.unit=number` 会导致编译器类型错误；拒绝不存在 operation 时允许候选清空 operationId；结构不合法输出需要一次有界修复。编译器与 Candidate Context Validator 现都会检查 relation 类型兼容，单条坏候选不再中断整轮。
+- 修正后的 held-out 连续三轮结果均为 16/16 语义匹配、8/8 成功编译、8/8 正确拒绝、0 误接受、0 误拒绝。每轮均发生 1 次结构修复并成功，均发生 8 次 `not_compilable` 自检但修复数为 0。三轮合计 75 次模型调用、84,416 ms 模型调用耗时、157,373 prompt tokens 和 12,084 completion tokens。该结果说明结构修复在该样本中有直接价值，而全量 `not_compilable` 自检目前只有成本、没有观测到收益；进入 M1 前应考虑改为条件触发或暂时关闭。该结果仍是小型合成集，不作为通用准确率承诺。
+- 根据上述三轮结果，当前关闭 `not_compilable` 自检并删除对应运行状态与指标字段，只保留一次有界结构修复。日志策略收敛为：LLM 输入/输出和最终 `[RESULT]` 使用 INFO；解析、fixture、编译、HTTP、单规则过程与结果落盘位置最多使用 DEBUG；重复的请求体、响应体和 mutation 逐项日志删除。敏感字段仍在任何日志输出前统一脱敏。
+- M0 收尾时将 extractor 接口整理为显式 `ExtractionResult(candidate, telemetry)`，删除容易错配且不利于并发的 `last_trace` 可变旁路状态；Prompt 构建与安全日志视图位于 `generation/semantic_prompt.py`，DeepSeek 适配器只负责模型请求、Pydantic 校验和一次结构修复；运行指标、模型用量和 benchmark 评分分别建模，避免将评测字段混入 TestSpec 领域模型。
+- 上述 DeepSeek 第二次验证只运行到结构校验与编译，没有提供 Base URL，因此准确表述是“4 条编译成功”，不是“4 条已执行”。5 条真实 HTTP 执行成功来自人工 fixture 路径，二者用于隔离评估不同组件，不能混作同一指标。
+- `compiler_fixtures.json` 仅用于隔离测试 Pydantic、编译器和执行器，其中故意包含非法字段引用；它不是用户输入，也不是 DeepSeek 的预期答案或成功率依据。
 
 ### M1：确定性基线
 

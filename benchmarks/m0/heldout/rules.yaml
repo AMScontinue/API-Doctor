@@ -1,0 +1,62 @@
+rules:
+  - id: booking-time-order-paraphrase
+    operation_id: createBooking
+    description: A booking must finish after it starts. Send a request that violates this invariant; the API should answer 422.
+    expected_status_codes: [422]
+  - id: attendees-positive-paraphrase
+    operation_id: createBooking
+    description: 参会人数不能少于一人，低于下限时接口返回 422。
+    expected_status_codes: [422]
+  - id: booking-title-required
+    operation_id: createBooking
+    description: title 不可缺失；缺少 title 的创建请求应返回 422。
+    expected_status_codes: [422]
+  - id: online-meeting-url-required
+    operation_id: createBooking
+    description: delivery_mode 选择 online 时必须提供 meeting_url；请验证缺少链接会返回 422。
+    expected_status_codes: [422]
+  - id: onsite-room-required
+    operation_id: createBooking
+    description: For an onsite booking, room_code is mandatory. Omitting it must be rejected with status 422.
+    expected_status_codes: [422]
+  - id: sms-phone-required
+    operation_id: createInvoice
+    description: channel=sms 的账单必须包含 phone_number，缺失时返回 422。
+    expected_status_codes: [422]
+  - id: email-phone-forbidden
+    operation_id: createInvoice
+    description: When channel is email, phone_number must not be submitted. Including it should return 422.
+    expected_status_codes: [422]
+  - id: discount-not-greater-than-subtotal
+    operation_id: createInvoice
+    description: discount 不得高于 subtotal；构造违反关系的请求，预期 422。
+    expected_status_codes: [422]
+  - id: unsupported-booking-roundtrip
+    description: 创建预约后，必须能使用响应中的 booking_id 查询到同一预约，查询响应为 200。
+    expected_status_codes: [200]
+  - id: unsupported-retry-header
+    operation_id: createInvoice
+    description: Retrying with the same X-Request-Key header must not create a duplicate invoice.
+    expected_status_codes: [200, 201]
+  - id: unknown-booking-field
+    operation_id: createBooking
+    description: attendee_limit 必须大于零，违反时返回 422。
+    expected_status_codes: [422]
+  - id: unknown-operation
+    operation_id: approveInvoice
+    description: 审批账单时 approval_code 必填，缺少时返回 422。
+    expected_status_codes: [422]
+  - id: missing-status-oracle
+    operation_id: createProfile
+    description: business 账户必须填写 company_name。
+  - id: ambiguous-premium-treatment
+    operation_id: createProfile
+    description: Important customers should receive appropriate premium treatment.
+  - id: nested-city-required
+    operation_id: createProfile
+    description: profile.city 必填；缺失时返回 422。
+    expected_status_codes: [422]
+  - id: unsupported-external-credit-check
+    operation_id: createInvoice
+    description: 大额账单必须先通过外部征信系统审核，审核未通过时返回 409。
+    expected_status_codes: [409]

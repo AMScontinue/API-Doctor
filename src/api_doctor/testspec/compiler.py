@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 
 from .models import (
@@ -16,6 +17,9 @@ from .models import (
     SemanticTestCandidate,
     SetValue,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class CompileError(ValueError):
@@ -99,8 +103,12 @@ def _apply_relation(
         raise CompileError("field_relation requires matching field types")
     delta = _delta_value(relation)
     if left_schema.get("format") == right_schema.get("format") == "date-time":
+        if not isinstance(delta, timedelta):
+            raise CompileError("date-time field_relation requires a time delta unit")
         right: Any = anchor
     elif left_schema.get("type") in {"integer", "number"}:
+        if isinstance(delta, timedelta):
+            raise CompileError("numeric field_relation requires the number delta unit")
         right = _default_value(right_name, right_schema, anchor)
     else:
         raise CompileError("M0 field_relation supports numeric and date-time fields")
@@ -138,6 +146,12 @@ def compile_candidate(
     if operation is None:
         raise CompileError(f"unknown operation_id {candidate.operation_id}")
     body = _build_baseline(operation, anchor)
+    logger.debug(
+        "[COMPILE] start rule=%s operation=%s mutations=%d",
+        candidate.rule_id,
+        operation.operation_id,
+        len(candidate.mutations),
+    )
     intentionally_omitted: set[str] = set()
     for mutation in candidate.mutations:
         if isinstance(mutation, SetValue):
@@ -164,7 +178,7 @@ def compile_candidate(
     if missing != (intentionally_omitted & required):
         raise CompileError(f"baseline is missing required fields: {sorted(missing)}")
     assert candidate.expected is not None
-    return CompiledTestCase(
+    case = CompiledTestCase(
         case_id=f"TC-M0-{case_number:03d}",
         rule_id=candidate.rule_id,
         operation_id=operation.operation_id,
@@ -182,3 +196,11 @@ def compile_candidate(
         seed=seed,
         time_anchor=anchor,
     )
+    logger.debug(
+        "[COMPILE] success rule=%s case=%s method=%s path=%s",
+        candidate.rule_id,
+        case.case_id,
+        case.method,
+        case.path,
+    )
+    return case

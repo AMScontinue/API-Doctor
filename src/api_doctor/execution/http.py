@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
+from time import perf_counter
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from api_doctor.testspec.models import CompiledTestCase, TestResult
+
+
+logger = logging.getLogger(__name__)
 
 
 def execute_case(case: CompiledTestCase, base_url: str) -> TestResult:
@@ -23,6 +28,8 @@ def execute_case(case: CompiledTestCase, base_url: str) -> TestResult:
     )
     status: int
     body: object
+    logger.debug("[HTTP] request case=%s method=%s url=%s", case.case_id, case.method, target.geturl())
+    started = perf_counter()
     try:
         with urlopen(request, timeout=5) as response:
             status = response.status
@@ -30,6 +37,7 @@ def execute_case(case: CompiledTestCase, base_url: str) -> TestResult:
     except HTTPError as error:
         status = error.code
         raw_body = error.read(1_000_001)
+    duration_ms = round((perf_counter() - started) * 1000)
     if len(raw_body) > 1_000_000:
         return TestResult(
             case_id=case.case_id,
@@ -43,10 +51,19 @@ def execute_case(case: CompiledTestCase, base_url: str) -> TestResult:
     except json.JSONDecodeError:
         body = raw_body.decode("utf-8", errors="replace")
     allowed = case.assertions[0].allowed
-    return TestResult(
+    result = TestResult(
         case_id=case.case_id,
         outcome="passed" if status in allowed else "failed",
         actual_status=status,
         expected_statuses=allowed,
         response_body=body,
     )
+    logger.debug(
+        "[HTTP] response case=%s status=%d expected=%s outcome=%s duration_ms=%d",
+        case.case_id,
+        status,
+        allowed,
+        result.outcome,
+        duration_ms,
+    )
+    return result

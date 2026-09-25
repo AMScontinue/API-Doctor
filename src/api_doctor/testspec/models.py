@@ -17,18 +17,18 @@ class StrictModel(BaseModel):
 
 class SetValue(StrictModel):
     kind: Literal["set_value"]
-    path: str
+    path: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
     value: JsonValue
 
 
 class OmitField(StrictModel):
     kind: Literal["omit_field"]
-    path: str
+    path: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class Boundary(StrictModel):
     kind: Literal["boundary"]
-    path: str
+    path: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
     position: Literal["below_minimum", "at_minimum", "above_maximum", "at_maximum"]
 
 
@@ -39,9 +39,9 @@ class Delta(StrictModel):
 
 class FieldRelation(StrictModel):
     kind: Literal["field_relation"]
-    left: str
+    left: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
     operator: Literal["lt", "lte", "eq", "ne", "gte", "gt"]
-    right: str
+    right: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
     delta: Delta = Field(default_factory=lambda: Delta(value=1))
 
 
@@ -123,24 +123,3 @@ class RuleRecord(StrictModel):
     operation_id: str | None = None
     description: str
     expected_status_codes: list[int] | None = None
-
-
-class SpikeMetrics(StrictModel):
-    mode: str
-    total_rules: int
-    structured_successes: int
-    compilable_candidates: int
-    compiled_cases: int
-    executed_cases: int
-    passed_cases: int
-    failed_cases: int
-    rejected_rules: int
-    invalid_reference_count: int
-
-    def ratios(self) -> dict[str, float]:
-        denominator = self.total_rules or 1
-        return {
-            "structured_success_rate": self.structured_successes / denominator,
-            "compile_rate": self.compiled_cases / denominator,
-            "rejection_rate": self.rejected_rules / denominator,
-        }

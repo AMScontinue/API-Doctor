@@ -22,16 +22,16 @@
     "source": {"kind": "business_rule", "id": "discount-not-over-total"}
   },
   {
-    "rule_id": "card-token-required",
+    "rule_id": "cash-card-token-forbidden",
     "status": "compilable",
     "operation_id": "createOrder",
-    "purpose": "验证银行卡支付缺少 card_token 时服务拒绝请求",
+    "purpose": "验证现金支付提交 card_token 时服务拒绝请求",
     "mutations": [
-      {"kind": "set_value", "path": "$.payment_method", "value": "card"},
-      {"kind": "omit_field", "path": "$.card_token"}
+      {"kind": "set_value", "path": "$.payment_method", "value": "cash"},
+      {"kind": "set_value", "path": "$.card_token", "value": "unexpected-token"}
     ],
     "expected": {"status_codes": [422]},
-    "source": {"kind": "business_rule", "id": "card-token-required"}
+    "source": {"kind": "business_rule", "id": "cash-card-token-forbidden"}
   },
   {
     "rule_id": "quantity-positive",

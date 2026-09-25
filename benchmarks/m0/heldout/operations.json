@@ -1,0 +1,57 @@
+{
+  "operations": [
+    {
+      "operation_id": "createBooking",
+      "method": "POST",
+      "path": "/bookings",
+      "request_schema": {
+        "type": "object",
+        "required": ["title", "attendees", "start_at", "finish_at", "delivery_mode"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "example": "Architecture review"},
+          "attendees": {"type": "integer", "minimum": 1, "maximum": 50},
+          "start_at": {"type": "string", "format": "date-time"},
+          "finish_at": {"type": "string", "format": "date-time"},
+          "delivery_mode": {"type": "string", "enum": ["online", "onsite"]},
+          "meeting_url": {"type": "string", "example": "https://meet.example.test/room"},
+          "room_code": {"type": "string", "example": "R-201"}
+        }
+      }
+    },
+    {
+      "operation_id": "createInvoice",
+      "method": "POST",
+      "path": "/invoices",
+      "request_schema": {
+        "type": "object",
+        "required": ["customer_id", "subtotal", "discount", "channel"],
+        "properties": {
+          "customer_id": {"type": "integer", "minimum": 1, "example": 88},
+          "subtotal": {"type": "number", "minimum": 0, "example": 200},
+          "discount": {"type": "number", "minimum": 0, "example": 20},
+          "channel": {"type": "string", "enum": ["email", "sms"]},
+          "email_address": {"type": "string", "format": "email", "example": "billing@example.test"},
+          "phone_number": {"type": "string", "example": "+8613800000000"}
+        }
+      }
+    },
+    {
+      "operation_id": "createProfile",
+      "method": "POST",
+      "path": "/profiles",
+      "request_schema": {
+        "type": "object",
+        "required": ["display_name", "account_type"],
+        "properties": {
+          "display_name": {"type": "string", "minLength": 1, "example": "Ada"},
+          "account_type": {"type": "string", "enum": ["personal", "business"]},
+          "company_name": {"type": "string", "example": "Example Ltd"},
+          "profile": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}}
+          }
+        }
+      }
+    }
+  ]
+}
