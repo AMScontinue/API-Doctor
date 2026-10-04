@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from time import perf_counter
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -17,13 +17,33 @@ logger = logging.getLogger(__name__)
 
 def execute_case(case: CompiledTestCase, base_url: str) -> TestResult:
     base = urlparse(base_url)
-    target = urlparse(urljoin(base_url.rstrip("/") + "/", case.path.lstrip("/")))
+    rendered_path = case.request.path_template
+    for name, value in case.request.path_parameters.items():
+        rendered_path = rendered_path.replace("{" + name + "}", quote(str(value), safe=""))
+    if "{" in rendered_path or "}" in rendered_path:
+        raise ValueError("compiled request has unresolved path parameters")
+    target_url = urljoin(base_url.rstrip("/") + "/", rendered_path.lstrip("/"))
+    if case.request.query_parameters:
+        target_url += "?" + urlencode(case.request.query_parameters, doseq=True)
+    target = urlparse(target_url)
     if (target.scheme, target.hostname, target.port) != (base.scheme, base.hostname, base.port):
         raise ValueError("compiled request escaped configured base URL")
+    headers = {str(key): str(value) for key, value in case.request.headers.items()}
+    if case.request.media_type:
+        headers.setdefault("Content-Type", case.request.media_type)
+    if case.request.cookies:
+        headers["Cookie"] = "; ".join(
+            f"{key}={value}" for key, value in case.request.cookies.items()
+        )
+    data = (
+        json.dumps(case.request.body).encode("utf-8")
+        if case.request.body is not None
+        else None
+    )
     request = Request(
         target.geturl(),
-        data=json.dumps(case.body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        data=data,
+        headers=headers,
         method=case.method,
     )
     status: int

@@ -55,6 +55,18 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 当前生成正常路径、缺失必填字段、数值边界、非法枚举、格式、字符串长度和数组约束候选。负向场景没有 OpenAPI 声明的可依据验证状态码时，候选会保留但标记为 `not_compilable`，不猜测 400/422。
 
+将可编译候选物化为确定性 HTTP 请求：
+
+```bash
+.venv/bin/api-doctor compile \
+  --spec examples/buggy-shop/openapi.yaml \
+  --seed 20260924 \
+  --time-anchor 2026-10-02T10:00:00+00:00 \
+  --output runs/inspect/buggy-shop-cases.json
+```
+
+编译器直接使用 `OperationCatalog`，生成 path/query/header/cookie/body 分离的 `CompiledTestCase`。合法基线会先通过 JSON Schema 反向校验；OpenAPI 负向候选必须在 mutation 后真正违反请求 Schema，否则拒绝编译。
+
 ## M0 技术验证
 
 安装开发依赖：

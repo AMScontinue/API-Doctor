@@ -44,6 +44,10 @@ def _generated_operation_id(method: str, path: str) -> str:
     return f"generated_{method.lower()}_{path_part}"
 
 
+def _pointer_token(value: str) -> str:
+    return value.replace("~", "~0").replace("/", "~1")
+
+
 def _media(content: Any, location: str, warnings: list[ParseWarning]) -> tuple[str | None, dict[str, Any] | None]:
     if not isinstance(content, dict) or not content:
         return None, None
@@ -140,7 +144,7 @@ def load_openapi(path: Path) -> OperationCatalog:
             raw = path_item.get(method)
             if raw is None:
                 continue
-            pointer = f"#/paths/{api_path}/{method}"
+            pointer = f"#/paths/{_pointer_token(str(api_path))}/{method}"
             if not isinstance(raw, dict):
                 raise OpenAPIParseError(f"operation must be an object at {pointer}")
             operation_id = raw.get("operationId")

@@ -1256,6 +1256,14 @@ M1-B Schema 机械候选当前实现状态（2026-10-04）：
 - 负向候选只使用 OpenAPI 明确声明的 400/409/415/422 作为验证断言；无证据状态码时保留候选但标记 `not_compilable`；
 - 当前边界是顶层 JSON request body；参数位置、嵌套 Schema、`oneOf/anyOf`、pattern 及合法值生成器在后续 M1 子阶段扩展。
 
+M1-C 候选编译当前实现状态（2026-10-04）：
+
+- 已实现基于 example/examples/default/enum/const/type/format/边界的确定性合法值生成器，支持嵌套 object、array、`allOf` 合并以及 `oneOf/anyOf` 的首个可选分支；
+- 已实现 `compile_openapi_candidate`，直接使用 `OperationCatalog`，生成分离 path/query/header/cookie/body 的正式 `CompiledTestCase`；
+- 编译前验证合法基线，编译后验证 happy path 仍合法，并确认 OpenAPI 负向 mutation 确实违反目标 request Schema；
+- 无可靠生成策略的 `pattern` 字段会明确阻塞，需由 example/default/fixture 提供合法值，不猜测；
+- M0 `compile_candidate` 仍作 benchmark 兼容层保留，但已使用新的 `CompiledRequest` 输出结构。
+
 M1 完成后项目是“OpenAPI 确定性测试器 + LLM 语义 TestSpec 生成器”，具备 LLM 工程价值，但执行计划仍固定，不单独宣称已经形成完整 Agent。M1 的职责是为 M2 提供可信、可复用、受安全约束的工具层。
 
 ### M2：Agent 闭环

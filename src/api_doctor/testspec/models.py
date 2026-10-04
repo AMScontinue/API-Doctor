@@ -100,17 +100,43 @@ class Assertion(StrictModel):
     evidence_ref: str
 
 
+class CompiledRequest(StrictModel):
+    method: str
+    path_template: str
+    path_parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    query_parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    headers: dict[str, JsonValue] = Field(default_factory=dict)
+    cookies: dict[str, JsonValue] = Field(default_factory=dict)
+    body: JsonValue = None
+    media_type: str | None = None
+
+
 class CompiledTestCase(StrictModel):
     case_id: str
     rule_id: str
     operation_id: str
-    method: str
-    path: str
     purpose: str
-    body: dict[str, JsonValue]
+    request: CompiledRequest
     assertions: list[Assertion]
+    dependencies: list[str] = Field(default_factory=list)
+    risk: Literal["safe", "requires_approval"] = "safe"
     seed: int
     time_anchor: datetime
+
+    @property
+    def method(self) -> str:
+        """Compatibility view for the M0 executor."""
+        return self.request.method
+
+    @property
+    def path(self) -> str:
+        """Compatibility view for the M0 executor."""
+        return self.request.path_template
+
+    @property
+    def body(self) -> JsonValue:
+        """Compatibility view for M0 tests and reports."""
+        return self.request.body
 
 
 class TestResult(StrictModel):

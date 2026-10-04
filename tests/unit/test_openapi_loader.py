@@ -50,6 +50,7 @@ components:
     assert operation.responses[0].json_schema["required"] == ["id"]
     assert operation.security == [{"bearerAuth": []}]
     assert catalog.security_schemes["bearerAuth"].scheme == "bearer"
+    assert operation.source_pointer == "#/paths/~1users~1{id}/get"
 
 
 def test_loads_json_and_generates_stable_operation_id(tmp_path):

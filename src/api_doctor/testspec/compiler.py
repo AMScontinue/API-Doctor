@@ -10,6 +10,7 @@ from typing import Any
 from .models import (
     Assertion,
     Boundary,
+    CompiledRequest,
     CompiledTestCase,
     FieldRelation,
     OmitField,
@@ -185,10 +186,13 @@ def compile_candidate(
         case_id=f"TC-M0-{case_number:03d}",
         rule_id=candidate.rule_id,
         operation_id=operation.operation_id,
-        method=operation.method,
-        path=operation.path,
         purpose=candidate.purpose,
-        body=body,
+        request=CompiledRequest(
+            method=operation.method,
+            path_template=operation.path,
+            body=body,
+            media_type="application/json",
+        ),
         assertions=[
             Assertion(
                 allowed=candidate.expected.status_codes,
