@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Buggy Shop API
-  version: 0.1.0
-  description: Minimal local service used to exercise API Doctor.
+  version: 0.2.0
+  description: Stateful local service used to exercise API Doctor.
 servers:
   - url: http://127.0.0.1:18080
 paths:
@@ -23,13 +23,41 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "422":
           $ref: "#/components/responses/ValidationError"
+  /users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      operationId: getUser
+      summary: Get a user
+      description: Returns 404 when the user does not exist.
+      responses:
+        "200":
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteUser
+      summary: Delete a user
+      responses:
+        "204":
+          description: User deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
   /orders:
     post:
       operationId: createOrder
       summary: Create an order
-      description: End time must be later than start time and discount must not exceed total.
+      description: >-
+        End time must be later than start time. Discount must not exceed total.
+        Cash payments must omit card_token; card payments must provide it.
       requestBody:
         required: true
         content:
@@ -42,14 +70,36 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [id, status]
-                properties:
-                  id: {type: integer}
-                  status: {type: string}
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "422":
           $ref: "#/components/responses/ValidationError"
+  /orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceID"
+    get:
+      operationId: getOrder
+      summary: Get an order
+      description: Returns 404 when the order does not exist.
+      responses:
+        "200":
+          description: Order found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
+  parameters:
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
   schemas:
     CreateUser:
       type: object
@@ -79,17 +129,40 @@ components:
         quantity: {type: integer, minimum: 1, maximum: 100}
         total_amount: {type: number, minimum: 0}
         discount_amount: {type: number, minimum: 0}
-        start_time: {type: string, format: date-time}
-        end_time: {type: string, format: date-time}
+        start_time: {type: string, format: date-time, example: "2026-10-02T10:00:00Z"}
+        end_time: {type: string, format: date-time, example: "2026-10-02T11:00:00Z"}
         payment_method: {type: string, enum: [cash, card]}
-        card_token: {type: string}
+        card_token: {type: string, minLength: 1}
+    Order:
+      allOf:
+        - $ref: "#/components/schemas/CreateOrder"
+        - type: object
+          required: [id, status]
+          properties:
+            id: {type: integer, minimum: 1}
+            status: {type: string, enum: [created]}
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: {type: string}
   responses:
+    BadRequest:
+      description: Invalid JSON request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     ValidationError:
       description: Request violates a validation or business rule
       content:
         application/json:
           schema:
-            type: object
-            required: [error]
-            properties:
-              error: {type: string}
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

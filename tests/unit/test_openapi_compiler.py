@@ -51,8 +51,8 @@ def test_all_current_buggy_shop_schema_candidates_compile():
         if candidate.status == "compilable"
     ]
 
-    assert len(compiled) == 21
-    assert len({case.case_id for case in compiled}) == 21
+    assert len(compiled) == 22
+    assert len({case.case_id for case in compiled}) == 22
 
 
 def test_negative_candidate_has_valid_baseline_and_targeted_invalid_body():
@@ -67,7 +67,7 @@ def test_negative_candidate_has_valid_baseline_and_targeted_invalid_body():
 
     assert case.request.body["quantity"] == 101
     assert case.request.body["product_id"] >= 1
-    assert case.assertions[0].allowed == [422]
+    assert case.assertions[0].allowed == [400, 422]
 
 
 def test_compiler_materializes_required_parameters(tmp_path):

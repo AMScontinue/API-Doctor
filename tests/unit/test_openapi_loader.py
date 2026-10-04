@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -51,6 +52,20 @@ components:
     assert operation.security == [{"bearerAuth": []}]
     assert catalog.security_schemes["bearerAuth"].scheme == "bearer"
     assert operation.source_pointer == "#/paths/~1users~1{id}/get"
+
+
+def test_buggy_shop_contract_excludes_manual_reset_endpoint():
+    root = Path(__file__).resolve().parents[2]
+    catalog = load_openapi(root / "examples/buggy-shop/openapi.yaml")
+
+    assert set(catalog.operations) == {
+        "createUser",
+        "getUser",
+        "deleteUser",
+        "createOrder",
+        "getOrder",
+    }
+    assert all(operation.path != "/test/reset" for operation in catalog.operations.values())
 
 
 def test_loads_json_and_generates_stable_operation_id(tmp_path):

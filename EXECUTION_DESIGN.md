@@ -1272,6 +1272,15 @@ M1-D 确定性执行基线当前实现状态（2026-10-04）：
 - `api-doctor run` 输出脱敏的 `run.json`、`report.md` 和 `trajectory.jsonl`；
 - 使用真实 Go 服务完成一次 21 请求端到端运行：19 passed、2 failed、0 error、0 blocked。失败为 email format 未被服务拒绝，以及 Schema 合法但不满足文字中时间先后关系的 order happy path；该数据仅对当前示例版本与本次 run 有效。
 
+M1-E 演示服务扩展当前实现状态（2026-10-05）：
+
+- Go 服务已按职责拆分为启动配置、线程安全内存 store 和 HTTP handler，支持用户创建/查询/删除与订单创建/查询；
+- `/test/reset` 仅在 `BUGGY_SHOP_TEST_MODE=1` 时注册，不进入 OpenAPI，仍由用户手动调用；
+- 默认为无缺陷参考行为；`BUGGY_SHOP_DEFECTS` 可显式开启 `invalid-email-accepted` 和 `unknown-user-200`，Agent 运行时不读取该配置；
+- 正式 OpenAPI 已扩展为 5 个业务 operation，包含 path parameter、200/201/204/400/404/422 响应与完整请求/响应 Schema；
+- Go 测试覆盖用户生命周期、订单生命周期、缺陷开关和 test-mode reset。跨接口变量提取与依赖执行留在下一子阶段，不写死演示服务 operationId。
+- 真实对照运行中，默认无缺陷服务为 22/22 passed；开启两个缺陷后为 21 passed、1 failed，确定性 baseline 发现 `invalid-email-accepted`。`unknown-user-200` 尚未被当前只针对 request-body Schema 的候选触发，需要下一阶段的跨接口变量和不存在资源探针；两组数据仅对当前示例版本和对应 run 有效。
+
 M1 完成后项目是“OpenAPI 确定性测试器 + LLM 语义 TestSpec 生成器”，具备 LLM 工程价值，但执行计划仍固定，不单独宣称已经形成完整 Agent。M1 的职责是为 M2 提供可信、可复用、受安全约束的工具层。
 
 ### M2：Agent 闭环

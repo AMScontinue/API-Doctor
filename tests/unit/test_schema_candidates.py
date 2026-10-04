@@ -35,7 +35,7 @@ def test_buggy_shop_schema_generates_deterministic_candidates():
     enum = candidates["schema:createOrder:payment_method-invalid-enum"]
     assert isinstance(enum.mutations[0], SetValue)
     assert enum.mutations[0].value not in {"cash", "card"}
-    assert enum.expected.status_codes == [422]
+    assert enum.expected.status_codes == [400, 422]
     assert enum.source.kind == "openapi"
 
 

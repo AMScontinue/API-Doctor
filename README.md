@@ -73,7 +73,7 @@ Docker Compose 仅作为后续可选的一键复现方式。
 .venv/bin/api-doctor run \
   --spec examples/buggy-shop/openapi.yaml \
   --base-url http://127.0.0.1:18080 \
-  --max-tests 21 \
+  --max-tests 22 \
   --output runs/m1/baseline
 ```
 

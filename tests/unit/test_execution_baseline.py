@@ -44,13 +44,14 @@ def test_deterministic_runner_executes_budget_and_writes_redacted_artifacts(
     )
     paths = save_run_artifacts(run, tmp_path / "run")
 
-    assert run.metrics.candidates == 21
+    assert run.metrics.operations == 5
+    assert run.metrics.candidates == 22
     assert run.metrics.executed == 6
-    assert run.metrics.blocked == 15
+    assert run.metrics.blocked == 16
     assert run.metrics.passed + run.metrics.failed + run.metrics.errors == 6
     assert paths["json"].exists()
     assert paths["markdown"].exists()
-    assert len(paths["trajectory"].read_text().splitlines()) == 21
+    assert len(paths["trajectory"].read_text().splitlines()) == 22
     assert "## Summary" in paths["markdown"].read_text()
     assert "secret" not in paths["json"].read_text()
 
