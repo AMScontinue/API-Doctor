@@ -16,6 +16,7 @@ dependencies = [
 dev = ["pytest>=8.3,<9"]
 
 [project.scripts]
+api-doctor = "api_doctor.app_cli:main"
 api-doctor-m0 = "api_doctor.cli:main"
 
 [tool.pytest.ini_options]

@@ -16,6 +16,7 @@ from .models import (
     Operation,
     SemanticTestCandidate,
     SetValue,
+    UseBaseline,
 )
 
 
@@ -154,6 +155,8 @@ def compile_candidate(
     )
     intentionally_omitted: set[str] = set()
     for mutation in candidate.mutations:
+        if isinstance(mutation, UseBaseline):
+            continue
         if isinstance(mutation, SetValue):
             field, _ = _ensure_field(operation, mutation.path)
             body[field] = mutation.value

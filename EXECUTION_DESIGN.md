@@ -612,6 +612,21 @@ Analyzer/Decision 节点只能从受控枚举中选择下一动作：
 
 LLM 只能建议这些动作。宿主程序仍负责检查预算、重复用例、安全策略和硬终止条件，并可拒绝不合法的决定。
 
+### 6.5 什么才算有价值的 replan
+
+replan 必须由新观察触发，并至少满足以下一项，否则继续固定队列，不调用 LLM：
+
+- 前置接口失败或变量缺失，使一批依赖用例不可执行，需要取消或替换分支；
+- 一个失败存在多个合理解释，需要追加控制变量实验来区分假设；
+- 新响应产生了经过验证的 ID/token 等变量，解锁此前不可执行的跨接口用例；
+- 鉴权失效、限流、服务版本不一致等系统性观察使原计划大面积失效；
+- 人工拒绝危险操作后，需要保留安全分支并阻塞依赖该操作的后续流程；
+- 候选数显著大于剩余请求预算，需要依据风险、依赖解锁能力和信息价值重新排序。
+
+典型诊断例子：`GET /users/{unknown_id}` 违反契约返回 `200 {}` 后，Agent 不能直接断言根因，而应追加“创建真实用户后查询”和“查询另一个确定不存在 ID”等对照实验，用新观察区分“查询接口整体异常”和“不存在资源分支错误”。这种观察驱动的诊断选择是 M2 的核心 Agent 价值。
+
+状态码明确、下一条用例独立、预算耗尽、重复指纹、Schema/安全策略确定性失败等情况由代码直接处理，不为展示 Agent 而调用 replanner。
+
 ## 7. 循环与终止条件
 
 建议的控制循环：
@@ -696,6 +711,8 @@ finalize_report_and_regression_tests(state)
 - **Long-term Semantic Memory（后续候选）**：跨运行复用已确认的接口依赖、稳定数据构造经验和故障模式。每条记忆必须绑定服务身份、OpenAPI 指纹、来源、置信度、创建时间和失效条件，且默认不自动写入下一次决策上下文。
 
 LLM 上下文不等于完整 memory。上下文构建器只选择当前节点需要的 operation 摘要、最近观察、活跃假设、相关变量和剩余预算；大响应与旧轨迹只保存引用和摘要，避免上下文无限增长。
+
+MVP 不实现 LLM compactor。运行受 `max_tests/max_steps` 硬预算约束，Observation 使用结构化摘要，完整响应和历史轨迹落盘后仅通过 evidence reference 引用。确定性的 Context Builder 按 operation 依赖、变量血缘、故障分组和当前假设选取模型上下文，比再次调用 LLM 压缩更可复现，也不会丢失关键证据。只有未来出现长时间运行、大量非结构化工具输出并确实逼近上下文窗口时，才重新评估 compaction。
 
 ### 9.1 单次运行状态
 
@@ -982,6 +999,7 @@ OpenAPI 规则引擎 ─────┐
 
 ### 17.3 MVP mutation 类型
 
+- `use_baseline`：使用确定性生成的 Schema 合法基线，用于 happy path；
 - `set_value`：设置通过 Schema 校验的值；
 - `omit_field`：删除字段；
 - `boundary`：生成最小值、最大值及相邻无效值；
@@ -1222,6 +1240,24 @@ M0 当前实现状态（2026-09-24）：
 - 固定计划端到端运行；
 - Markdown/JSON 报告和单元测试。
 
+M1-A OpenAPI 解析当前实现状态（2026-09-26）：
+
+- 已实现 OpenAPI 3.x YAML/JSON 加载、文档指纹和文档内 `$ref` 解析；
+- 已实现 path/operation 参数合并、JSON 媒体类型选择、request/response/security scheme 规范化；
+- 缺失 `operationId` 时生成稳定内部 ID 并警告，重复 ID、缺失引用和外部引用会明确报错，递归引用保留 `$ref` 并警告；
+- 已增加 `api-doctor inspect --spec ...` 和 `examples/buggy-shop/openapi.yaml`；
+- 该 Catalog 是后续 Schema 机械候选、LLM 语义上下文、TestSpec 编译和 Agent 工具查询的统一输入；M0 的 `operations.json` loader 仅作隔离 benchmark 兼容层保留。
+
+M1-B Schema 机械候选当前实现状态（2026-10-04）：
+
+- 已从 `OperationCatalog` 的顶层 JSON request body Schema 生成 happy path、required、数值边界、enum、format、字符串长度和数组约束候选；
+- 规则引擎直接输出统一 `SemanticTestCandidate`，候选带 OpenAPI pointer 证据，不经过 LLM；
+- TestSpec 增加 `use_baseline` mutation 表示正常路径使用确定性合法基线，不伪造字段修改；
+- 负向候选只使用 OpenAPI 明确声明的 400/409/415/422 作为验证断言；无证据状态码时保留候选但标记 `not_compilable`；
+- 当前边界是顶层 JSON request body；参数位置、嵌套 Schema、`oneOf/anyOf`、pattern 及合法值生成器在后续 M1 子阶段扩展。
+
+M1 完成后项目是“OpenAPI 确定性测试器 + LLM 语义 TestSpec 生成器”，具备 LLM 工程价值，但执行计划仍固定，不单独宣称已经形成完整 Agent。M1 的职责是为 M2 提供可信、可复用、受安全约束的工具层。
+
 ### M2：Agent 闭环
 
 - DeepSeek 语义候选提取；
@@ -1230,6 +1266,8 @@ M0 当前实现状态（2026-09-24）：
 - 跨接口变量提取与工作流；
 - 失败后的诊断测试与局部 replan；
 - 结构化轨迹和硬预算。
+
+M2 是 Agent 简历价值的关键阶段：至少保存一条真实、非写死的轨迹，证明模型基于 HTTP Observation 形成或更新故障假设，选择受控诊断工具，新观察写回 Working Memory 后触发局部 replan，并由确定性预算和终止条件结束。LLM 调用次数不是目标；`state → decision → tool → observation → state` 的可审计闭环以及相对固定 baseline 的增益才是验收依据。
 
 ### M3：可交付性
 

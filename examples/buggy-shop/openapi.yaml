@@ -1,0 +1,95 @@
+openapi: 3.1.0
+info:
+  title: Buggy Shop API
+  version: 0.1.0
+  description: Minimal local service used to exercise API Doctor.
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /users:
+    post:
+      operationId: createUser
+      summary: Create a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUser"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create an order
+      description: End time must be later than start time and discount must not exceed total.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrder"
+      responses:
+        "201":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status]
+                properties:
+                  id: {type: integer}
+                  status: {type: string}
+        "422":
+          $ref: "#/components/responses/ValidationError"
+components:
+  schemas:
+    CreateUser:
+      type: object
+      required: [name, email]
+      properties:
+        name: {type: string, minLength: 1}
+        email: {type: string, format: email}
+    User:
+      allOf:
+        - $ref: "#/components/schemas/CreateUser"
+        - type: object
+          required: [id]
+          properties:
+            id: {type: integer, minimum: 1}
+    CreateOrder:
+      type: object
+      required:
+        - product_id
+        - quantity
+        - total_amount
+        - discount_amount
+        - start_time
+        - end_time
+        - payment_method
+      properties:
+        product_id: {type: integer, minimum: 1}
+        quantity: {type: integer, minimum: 1, maximum: 100}
+        total_amount: {type: number, minimum: 0}
+        discount_amount: {type: number, minimum: 0}
+        start_time: {type: string, format: date-time}
+        end_time: {type: string, format: date-time}
+        payment_method: {type: string, enum: [cash, card]}
+        card_token: {type: string}
+  responses:
+    ValidationError:
+      description: Request violates a validation or business rule
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: {type: string}

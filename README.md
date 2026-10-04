@@ -2,7 +2,7 @@
 
 API Doctor 是一个面向 OpenAPI 3.x 服务的自主接口测试与故障分析 Agent。它结合确定性 Schema 测试与 DeepSeek 语义分析，通过受控 HTTP 工具执行测试，根据真实响应追加诊断实验，并输出证据、复现步骤和 pytest 回归用例。
 
-当前已完成 M0 TestSpec 技术验证：确定性链路支持结构化候选与上下文校验、有限 IR 编译、非法引用拒绝和真实 HTTP 执行；DeepSeek 在不包含具体组合答案的当前 10 条小样本上返回 10/10 合法结构，5/5 条支持范围内规则成功编译，5 条能力外、非法或模糊规则被拒绝。该结果只用于技术验证，不代表产品准确率。
+当前已完成 M0 TestSpec 技术验证，并开始实现 M1 确定性基线。M1-A 已提供真实 OpenAPI 3.x YAML/JSON 加载、本地 `$ref` 解析、规范化 Operation Catalog 和检查命令。DeepSeek 的 M0 小样本结果只用于技术验证，不代表产品准确率。
 
 ## 核心设计
 
@@ -31,6 +31,29 @@ python -m api_doctor run \
 ```
 
 Docker Compose 仅作为后续可选的一键复现方式。
+
+## 检查 OpenAPI 解析结果
+
+重新执行 editable install 以安装最新 CLI，然后解析演示规范：
+
+```bash
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/api-doctor inspect \
+  --spec examples/buggy-shop/openapi.yaml \
+  --output runs/inspect/buggy-shop.json
+```
+
+省略 `--output` 时，规范化结果直接输出到终端。当前支持 OpenAPI 3.x、YAML/JSON 和文档内 `$ref`；外部 `$ref` 会明确报错，递归引用会保留引用并产生带位置的 warning。
+
+从请求体 Schema 生成确定性测试候选：
+
+```bash
+.venv/bin/api-doctor candidates \
+  --spec examples/buggy-shop/openapi.yaml \
+  --output runs/inspect/buggy-shop-candidates.json
+```
+
+当前生成正常路径、缺失必填字段、数值边界、非法枚举、格式、字符串长度和数组约束候选。负向场景没有 OpenAPI 声明的可依据验证状态码时，候选会保留但标记为 `not_compilable`，不猜测 400/422。
 
 ## M0 技术验证
 

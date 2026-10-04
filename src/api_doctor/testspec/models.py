@@ -15,6 +15,10 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class UseBaseline(StrictModel):
+    kind: Literal["use_baseline"]
+
+
 class SetValue(StrictModel):
     kind: Literal["set_value"]
     path: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
@@ -46,7 +50,7 @@ class FieldRelation(StrictModel):
 
 
 Mutation = Annotated[
-    SetValue | OmitField | Boundary | FieldRelation,
+    UseBaseline | SetValue | OmitField | Boundary | FieldRelation,
     Field(discriminator="kind"),
 ]
 
