@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 from api_doctor.generation.schema_candidates import generate_schema_candidates
+from api_doctor.execution.runner import run_baseline
 from api_doctor.openapi import load_openapi
+from api_doctor.reporting.report import save_run_artifacts
 from api_doctor.testspec.openapi_compiler import compile_openapi_candidate
 
 
@@ -30,12 +32,44 @@ def build_parser() -> argparse.ArgumentParser:
     compile_command.add_argument("--output", type=Path, help="write compiled cases to this file")
     compile_command.add_argument("--seed", type=int, default=20260924)
     compile_command.add_argument("--time-anchor", default="2026-10-02T10:00:00+00:00")
+    run = commands.add_parser("run", help="run the deterministic OpenAPI baseline")
+    run.add_argument("--spec", type=Path, required=True)
+    run.add_argument("--base-url", required=True)
+    run.add_argument("--output", type=Path, required=True)
+    run.add_argument("--max-tests", type=int, default=50)
+    run.add_argument("--seed", type=int, default=20260924)
+    run.add_argument("--time-anchor", default="2026-10-02T10:00:00+00:00")
+    run.add_argument("--timeout", type=float, default=5.0)
+    run.add_argument("--approve-delete", action="store_true")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     catalog = load_openapi(args.spec)
+    if args.command == "run":
+        baseline = run_baseline(
+            catalog,
+            base_url=args.base_url,
+            seed=args.seed,
+            anchor=datetime.fromisoformat(args.time_anchor),
+            max_tests=args.max_tests,
+            approve_delete=args.approve_delete,
+            timeout_seconds=args.timeout,
+        )
+        artifacts = save_run_artifacts(baseline, args.output)
+        print(
+            json.dumps(
+                {
+                    "run_id": baseline.run_id,
+                    "metrics": baseline.metrics.model_dump(mode="json"),
+                    "artifacts": {key: str(path) for key, path in artifacts.items()},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
     candidates = generate_schema_candidates(catalog) if args.command != "inspect" else []
     if args.command == "inspect":
         value = catalog.model_dump(mode="json")

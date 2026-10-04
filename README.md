@@ -67,6 +67,18 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 编译器直接使用 `OperationCatalog`，生成 path/query/header/cookie/body 分离的 `CompiledTestCase`。合法基线会先通过 JSON Schema 反向校验；OpenAPI 负向候选必须在 mutation 后真正违反请求 Schema，否则拒绝编译。
 
+启动 Go 服务后，运行完整确定性 baseline：
+
+```bash
+.venv/bin/api-doctor run \
+  --spec examples/buggy-shop/openapi.yaml \
+  --base-url http://127.0.0.1:18080 \
+  --max-tests 21 \
+  --output runs/m1/baseline
+```
+
+运行会生成 `run.json`、`report.md` 和 `trajectory.jsonl`。请求受 base URL 同源、重定向、超时、响应大小、方法和 DELETE 显式批准策略约束；响应会校验状态码、Content-Type 和对应 OpenAPI response Schema。
+
 ## M0 技术验证
 
 安装开发依赖：

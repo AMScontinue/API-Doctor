@@ -1264,6 +1264,14 @@ M1-C 候选编译当前实现状态（2026-10-04）：
 - 无可靠生成策略的 `pattern` 字段会明确阻塞，需由 example/default/fixture 提供合法值，不猜测；
 - M0 `compile_candidate` 仍作 benchmark 兼容层保留，但已使用新的 `CompiledRequest` 输出结构。
 
+M1-D 确定性执行基线当前实现状态（2026-10-04）：
+
+- 已实现 base URL 同源限制、同源重定向复查、重定向次数、超时、响应大小、HTTP method 白名单和 DELETE 显式批准；
+- 已实现状态码断言、OpenAPI response 选择、Content-Type 与 response JSON Schema 校验；
+- 已实现固定顺序、`max_tests` 硬预算、单用例错误隔离和 passed/failed/error/blocked 统计；
+- `api-doctor run` 输出脱敏的 `run.json`、`report.md` 和 `trajectory.jsonl`；
+- 使用真实 Go 服务完成一次 21 请求端到端运行：19 passed、2 failed、0 error、0 blocked。失败为 email format 未被服务拒绝，以及 Schema 合法但不满足文字中时间先后关系的 order happy path；该数据仅对当前示例版本与本次 run 有效。
+
 M1 完成后项目是“OpenAPI 确定性测试器 + LLM 语义 TestSpec 生成器”，具备 LLM 工程价值，但执行计划仍固定，不单独宣称已经形成完整 Agent。M1 的职责是为 M2 提供可信、可复用、受安全约束的工具层。
 
 ### M2：Agent 闭环

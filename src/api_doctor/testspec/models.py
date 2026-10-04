@@ -141,10 +141,14 @@ class CompiledTestCase(StrictModel):
 
 class TestResult(StrictModel):
     case_id: str
-    outcome: Literal["passed", "failed", "error"]
+    outcome: Literal["passed", "failed", "error", "blocked"]
     actual_status: int | None
     expected_statuses: list[int]
     response_body: JsonValue = None
+    response_headers: dict[str, str] = Field(default_factory=dict)
+    request_url: str | None = None
+    duration_ms: int | None = None
+    violations: list[str] = Field(default_factory=list)
     error: str | None = None
 
 
