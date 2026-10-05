@@ -1,0 +1,17 @@
+rules:
+  - id: order-time-range
+    operation_id: createOrder
+    description: end_time must be later than start_time
+    expected_status_codes: [422]
+  - id: discount-not-over-total
+    operation_id: createOrder
+    description: discount_amount must not exceed total_amount
+    expected_status_codes: [422]
+  - id: cash-card-token-forbidden
+    operation_id: createOrder
+    description: cash payments must omit card_token
+    expected_status_codes: [422]
+  - id: card-token-required
+    operation_id: createOrder
+    description: card payments must provide card_token
+    expected_status_codes: [422]

@@ -20,6 +20,7 @@ def build_catalog_context(catalog: OperationCatalog) -> dict[str, object]:
                 "path": operation.path,
                 "summary": operation.summary,
                 "description": operation.description,
+                "description_source": f"{operation.source_pointer}/description",
                 "parameters": [
                     {
                         "name": parameter.name,

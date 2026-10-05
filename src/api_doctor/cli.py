@@ -7,14 +7,17 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from api_doctor.config import load_dotenv
 from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
 from api_doctor.generation.schema_candidates import generate_schema_candidates
+from api_doctor.generation.rules import load_business_rules
+from api_doctor.generation.semantic_discovery import discover_semantic_tests
 from api_doctor.generation.workflow_discovery import discover_workflows
 from api_doctor.llm.deepseek import DeepSeekGateway
+from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.reporting.report import save_run_artifacts
@@ -63,6 +66,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_spec(discover)
     discover.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+    )
+
+    discover_tests = commands.add_parser(
+        "discover-tests",
+        help="ask DeepSeek for typed semantic test candidates without executing them",
+    )
+    _add_spec(discover_tests)
+    discover_tests.add_argument("--rules", type=Path)
+    discover_tests.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
@@ -127,22 +142,39 @@ def _compile(args: argparse.Namespace, catalog: OperationCatalog) -> None:
 
 
 def _discover_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    response = _call_llm_discovery(args, lambda gateway: discover_workflows(catalog, gateway))
+    _write_json(_model_response_payload("discovery", response), args.output)
+
+
+def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    rules = load_business_rules(args.rules)
+    response = _call_llm_discovery(
+        args,
+        lambda gateway: discover_semantic_tests(catalog, rules, gateway),
+    )
+    _write_json(_model_response_payload("discovery", response), args.output)
+
+
+def _call_llm_discovery(
+    args: argparse.Namespace,
+    call: Callable[[ModelGateway], ModelResponse],
+) -> ModelResponse:
     load_dotenv(Path(".env"))
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(message)s")
-    response = discover_workflows(catalog, DeepSeekGateway())
-    _write_json(
-        {
-            "discovery": response.value.model_dump(mode="json"),
-            "model_usage": {
-                "calls": response.telemetry.calls,
-                "duration_ms": response.telemetry.duration_ms,
-                "prompt_tokens": response.telemetry.prompt_tokens,
-                "completion_tokens": response.telemetry.completion_tokens,
-                "structure_repair_attempts": response.telemetry.structure_repair_attempts,
-            },
+    return call(DeepSeekGateway())
+
+
+def _model_response_payload(name: str, response: ModelResponse) -> dict[str, object]:
+    return {
+        name: response.value.model_dump(mode="json"),
+        "model_usage": {
+            "calls": response.telemetry.calls,
+            "duration_ms": response.telemetry.duration_ms,
+            "prompt_tokens": response.telemetry.prompt_tokens,
+            "completion_tokens": response.telemetry.completion_tokens,
+            "structure_repair_attempts": response.telemetry.structure_repair_attempts,
         },
-        args.output,
-    )
+    }
 
 
 def main() -> None:
@@ -159,6 +191,8 @@ def main() -> None:
         _compile(args, catalog)
     elif args.command == "discover-workflows":
         _discover_workflows(args, catalog)
+    elif args.command == "discover-tests":
+        _discover_semantic_tests(args, catalog)
     else:
         _run(args, catalog)
 

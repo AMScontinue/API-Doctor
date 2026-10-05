@@ -89,6 +89,17 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 该命令从 `.env` 读取 `DEEPSEEK_API_KEY`。发给模型的 Catalog 上下文不包含 OpenAPI Links，因此模型需要根据 operation 描述、请求参数和响应 Schema 提出生产者—消费者关系。输出只是经 Pydantic 结构校验的 `WorkflowCandidate`；语义验证、编译和执行属于后续 M2 阶段。
 
+从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
+
+```bash
+.venv/bin/api-doctor discover-tests \
+  --spec examples/buggy-shop/openapi.yaml \
+  --rules examples/buggy-shop/rules.yaml \
+  --output runs/m2/semantic-tests.json
+```
+
+模型可以提出字段关系、条件必填和条件禁止等 `SemanticTestCandidate`，也应将无法用当前 DSL 表达的约束标记为 `not_compilable`。该命令同样只生成提议；候选尚未经证据忠实性、字段引用、类型兼容、去重和冲突校验，不会直接执行。
+
 ## M0 技术验证
 
 安装开发依赖：

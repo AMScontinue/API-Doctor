@@ -1320,6 +1320,15 @@ M2-A LLM Workflow 发现当前实现状态（2026-10-05）：
 - 一次真实 DeepSeek 验证中，模型在未看到 Links 时提出用户 `create → read → delete` 和订单 `create → read` 工作流，并指出 product_id、时间和 card_token 等无上游生产者的前置数据歧义。本次共 2 次模型调用，其中 1 次为结构修复，总模型耗时 6,902 ms、prompt 6,964 tokens、completion 1,602 tokens；数据仅对当前模型、Prompt、示例规范和本次保存运行有效；
 - 当前仅证明“模型能提出结构化工作流”。operation/字段引用、类型兼容、风险和证据的确定性语义验证属于 M2-B；未完成 M2-B 前不得执行这些 Workflow。
 
+M2-B1 LLM 语义测试发现当前实现状态（2026-10-05）：
+
+- 已实现正式可选业务规则加载，`rules.yaml` 中每条规则包含稳定 id、operation 提示、自然语言描述和可选期望状态码；
+- `api-doctor discover-tests` 将精简 Catalog、operation description、description 证据 pointer、用户规则和受支持 mutation 交给共享 `ModelGateway`，输出受 Pydantic 约束的 `SemanticDiscovery`；
+- 当前语义 DSL 限定为顶层 request body 的 `set_value`、`omit_field` 和数字/日期 `field_relation`，允许多个 mutation 组合表达条件必填和条件禁止；
+- 一次真实 DeepSeek 验证中，模型一次调用生成 11 个结构合法候选：包括时间先后、折扣与总额、cash 禁止 card token、card 条件必填；模型既从用户规则生成候选，也自主从 OpenAPI description 提出等价候选，并将当前 DSL 无法表达的 GET 404 场景标记为 `not_compilable`；
+- 本次模型耗时 5,587 ms、prompt 4,347 tokens、completion 1,621 tokens，无结构修复；结果同时暴露用户规则与 description 会生成重复候选，且 description 对期望状态的证据强度需要代码复核，证明后续语义校验与候选融合是必要步骤；
+- 当前候选只通过结构校验，不进入 executor。M2-B2 必须复核 source/rule/status、operation/字段引用、relation 类型和 mutation 组合；M2-B3 再与机械候选去重、合并 provenance 并报告冲突。
+
 ### M3：可交付性
 
 - pytest renderer 和 JUnit XML；
