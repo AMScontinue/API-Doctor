@@ -21,8 +21,12 @@ from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.reporting.report import save_run_artifacts
-from api_doctor.testspec.openapi_compiler import compile_openapi_candidate
-from api_doctor.testspec.semantic_validation import validate_semantic_candidates
+from api_doctor.testspec.fusion import CandidateIssue, fuse_test_cases
+from api_doctor.testspec.openapi_compiler import OpenAPICompileError, compile_openapi_candidate
+from api_doctor.testspec.semantic_validation import (
+    SemanticValidationResult,
+    validate_semantic_candidates,
+)
 
 
 DEFAULT_SEED = 20260924
@@ -92,6 +96,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_generation_options(validate_tests)
     validate_tests.add_argument("--input", type=Path, required=True)
     validate_tests.add_argument("--rules", type=Path)
+
+    fuse_tests = commands.add_parser(
+        "fuse-tests",
+        help="merge mechanical and validated semantic tests without HTTP",
+    )
+    _add_spec(fuse_tests, output_required=True)
+    _add_generation_options(fuse_tests)
+    fuse_tests.add_argument("--input", type=Path, required=True)
+    fuse_tests.add_argument("--rules", type=Path)
 
     run = commands.add_parser("run", help="execute the complete deterministic test pipeline")
     _add_spec(run, output_required=True)
@@ -165,20 +178,83 @@ def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog
     _write_json(_model_response_payload("discovery", response), args.output)
 
 
-def _validate_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+def _semantic_validation(
+    args: argparse.Namespace,
+    catalog: OperationCatalog,
+) -> SemanticValidationResult:
     payload = json.loads(args.input.read_text(encoding="utf-8"))
     discovery = SemanticDiscovery.model_validate(payload.get("discovery", payload))
-    result = validate_semantic_candidates(
+    return validate_semantic_candidates(
         discovery.candidates,
         catalog,
         load_business_rules(args.rules),
         seed=args.seed,
         anchor=datetime.fromisoformat(args.time_anchor),
     )
+
+
+def _validate_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    result = _semantic_validation(args, catalog)
     _write_json(
         {
             "summary": result.summary(),
             "reviews": [review.model_dump(mode="json") for review in result.reviews],
+        },
+        args.output,
+    )
+
+
+def _fuse_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    anchor = datetime.fromisoformat(args.time_anchor)
+    compiled = []
+    rejected: list[CandidateIssue] = []
+    unsupported: list[CandidateIssue] = []
+
+    for index, candidate in enumerate(generate_schema_candidates(catalog), start=1):
+        if candidate.status == "not_compilable":
+            unsupported.append(
+                CandidateIssue(
+                    candidate=candidate,
+                    reasons=[candidate.unsupported_reason or "candidate is not compilable"],
+                )
+            )
+            continue
+        try:
+            compiled.append(
+                compile_openapi_candidate(
+                    candidate,
+                    catalog,
+                    case_number=index,
+                    seed=args.seed,
+                    anchor=anchor,
+                )
+            )
+        except OpenAPICompileError as error:
+            rejected.append(CandidateIssue(candidate=candidate, reasons=[str(error)]))
+
+    validation = _semantic_validation(args, catalog)
+    for review in validation.reviews:
+        if review.verdict == "rejected":
+            rejected.append(CandidateIssue(candidate=review.candidate, reasons=review.errors))
+        elif review.compiled_case is not None:
+            compiled.append(review.compiled_case)
+        else:
+            unsupported.append(
+                CandidateIssue(
+                    candidate=review.candidate,
+                    reasons=[review.candidate.unsupported_reason or "candidate is not compilable"],
+                )
+            )
+
+    plan = fuse_test_cases(
+        compiled,
+        rejected_candidates=rejected,
+        unsupported_candidates=unsupported,
+    )
+    _write_json(
+        {
+            "summary": plan.summary(),
+            "plan": plan.model_dump(mode="json"),
         },
         args.output,
     )
@@ -224,6 +300,8 @@ def main() -> None:
         _discover_semantic_tests(args, catalog)
     elif args.command == "validate-tests":
         _validate_semantic_tests(args, catalog)
+    elif args.command == "fuse-tests":
+        _fuse_tests(args, catalog)
     else:
         _run(args, catalog)
 

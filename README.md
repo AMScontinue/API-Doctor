@@ -110,7 +110,19 @@ Docker Compose 仅作为后续可选的一键复现方式。
   --output runs/m2/validated-semantic-tests.json
 ```
 
-校验器逐条核对候选引用的规则或 description、operation、状态码、字段、Schema 合法性和字段关系类型，再调用正式编译器生成 `CompiledTestCase`。非法候选会带原因单独拒绝，不影响同批其他候选。去重、冲突处理和与机械候选融合属于下一阶段。
+校验器逐条核对候选引用的规则或 description、operation、状态码、字段、Schema 合法性和字段关系类型，再调用正式编译器生成 `CompiledTestCase`。非法候选会带原因单独拒绝，不影响同批其他候选。
+
+将机械测试与校验后的语义测试融合成最终计划（不调用 LLM，也不发送 HTTP）：
+
+```bash
+.venv/bin/api-doctor fuse-tests \
+  --spec examples/buggy-shop/openapi.yaml \
+  --rules examples/buggy-shop/rules.yaml \
+  --input runs/m2/semantic-tests.json \
+  --output runs/m2/final-test-plan.json
+```
+
+融合器根据实际 method、path、参数、请求体、依赖和风险计算稳定请求指纹。相同请求及相同期望只保留一次并合并证据；相同请求出现不同期望状态码时不会任选其一，而是移出执行集并记录为 `requires_confirmation`。被拒绝和暂不可编译的候选也保留在计划中供审计。
 
 ## M0 技术验证
 
