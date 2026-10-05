@@ -1318,7 +1318,7 @@ M2-A LLM Workflow 发现当前实现状态（2026-10-05）：
 - 已实现受限 `WorkflowCandidate` DSL：2–4 个 step、响应 JSON Pointer 变量提取、path/query/header/cookie 参数绑定、置信度和歧义列表；结构层会拒绝重复 step/变量和先使用后提取的变量；
 - `api-doctor discover-workflows` 只生成提议并记录模型用量，不发送任何被测 HTTP 请求，不把模型输出直接交给 executor；
 - 一次真实 DeepSeek 验证中，模型在未看到 Links 时提出用户 `create → read → delete` 和订单 `create → read` 工作流，并指出 product_id、时间和 card_token 等无上游生产者的前置数据歧义。本次共 2 次模型调用，其中 1 次为结构修复，总模型耗时 6,902 ms、prompt 6,964 tokens、completion 1,602 tokens；数据仅对当前模型、Prompt、示例规范和本次保存运行有效；
-- 当前仅证明“模型能提出结构化工作流”。operation/字段引用、类型兼容、风险和证据的确定性语义验证属于 M2-B；未完成 M2-B 前不得执行这些 Workflow。
+- 该阶段仅证明“模型能提出结构化工作流”；其确定性语义校验与编译已在 M2-C 实现。工作流接入 Agent Runner 前仍不得执行。
 
 M2-B1 LLM 语义测试发现当前实现状态（2026-10-05）：
 
@@ -1347,6 +1347,25 @@ M2-B3 候选融合当前实现状态（2026-10-06）：
 - `api-doctor fuse-tests` 会重新校验保存的语义 discovery、生成并编译机械候选，再输出融合计划；该命令不调用 LLM，也不发送 HTTP；
 - 使用真实 DeepSeek 保存产物与 buggy-shop 机械候选融合：36 条已编译输入形成 32 条可执行用例，4 条重复被合并，0 个冲突；另保留 5 条暂不可编译候选，其中 3 条来自缺少契约状态依据的机械候选，2 条来自 DSL 无法表达的语义场景。本次数据只对当前保存产物、规范和固定 seed/时间锚点有效；
 - 单元测试不依赖 LLM prompt 或模型答案，覆盖不同 DSL 生成相同请求、证据合并、冲突隔离、不同请求保留、输入顺序稳定、元数据不影响指纹，以及拒绝/不支持项的审计保留。
+
+M2-C 工作流校验与编译当前实现状态（2026-10-06）：
+
+- `api-doctor validate-workflows` 读取已保存的 LLM workflow discovery，不再次调用模型，也不发送 HTTP；每条工作流独立校验，错误提议不会阻断同批其他工作流；
+- 校验器确认所有 operation 存在、变量只从声明了对应 JSON Pointer 的 2xx 响应 Schema 提取、绑定目标参数的位置与名称真实存在，并验证所有可能的提取类型均可赋给目标参数；
+- 支持穿过 response Schema 的 `allOf/anyOf/oneOf` 和数组索引查找字段；编译结果按响应状态保存提取 Schema，并保存目标参数 Schema，使运行时可以用真实响应值再次验证，而不是只信任静态类型；
+- 重复 workflow id、同一步骤重复绑定同一参数、不存在的成功响应字段、错误参数位置及类型不兼容均会被拒绝；DELETE 步骤只产生 `requires_approval` 风险标记，不能授予执行权限；
+- 之前保存的真实 DeepSeek 产物中，用户 `create → read → delete` 和订单 `create → read` 两条工作流均通过确定性校验并编译；其中用户工作流因 DELETE 标记为需要批准。该验证不代表工作流已执行；真实变量提取与注入属于下一阶段 Agent Runner；
+- 当前单元测试使用手工构造的正确及对抗性提议，不依赖 prompt 示例，覆盖合法生命周期、批内错误隔离、未知 operation、只存在于错误响应的字段、错误参数位置、类型不兼容、重复绑定和重复 workflow id。
+
+M2-D 工作流运行时当前实现状态（2026-10-06）：
+
+- `api-doctor run-workflow` 会针对当前 OpenAPI 重新校验保存的 workflow discovery，只允许选择通过校验的工作流；该命令自身不调用 LLM，但直接消费 LLM 发现产物；
+- 每个 step 由正式 OpenAPI 编译器生成合法 baseline 请求，workflow binding 作为受控 parameter override 注入；请求仍通过同源 URL、重定向、超时、响应大小、method 和 DELETE 审批策略约束的同一 HTTP 工具执行；
+- 只有通过状态码和完整 response Schema 校验的步骤才能提取变量；具体值先按对应响应状态的提取 Schema 校验，写入单次运行 Working Memory，注入下游前再按目标参数 Schema 校验；同一步的多个变量采用原子写入，任一提取失败不会留下部分状态；
+- 步骤失败、编译错误、变量错误、预算耗尽或安全阻断会停止工作流后缀；未执行步骤保留明确 blocked 原因。DELETE 即使由 LLM 提议也必须由用户显式传入 `--approve-delete`；
+- 运行产物包含脱敏 `run.json`、Markdown 报告和逐步 `trajectory.jsonl`，记录具体请求、Observation、变量来源和依赖 case id；
+- 一次真实本地运行执行 DeepSeek 发现的 `createOrder → getOrder`：`createOrder` 返回 201 和 `id=1`，代码提取并校验 `order_id` 后注入 `getOrder.path.id`，实际请求 `/orders/1` 返回 200；2 步均通过，0 failed、0 error、0 blocked。该数据只对应当前保存 discovery、示例服务和本次运行；
+- 这一步接通了“LLM 工作流发现 → 确定性校验/编译 → 真实 HTTP → 变量 Working Memory → 下游工具调用”，但尚不是完整 Agent 闭环；统一 Planner、语义测试计划执行、Observation 分析和 replan 仍待实现。
 
 ### M3：可交付性
 

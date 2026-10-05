@@ -89,6 +89,30 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 该命令从 `.env` 读取 `DEEPSEEK_API_KEY`。发给模型的 Catalog 上下文不包含 OpenAPI Links，因此模型需要根据 operation 描述、请求参数和响应 Schema 提出生产者—消费者关系。输出只是经 Pydantic 结构校验的 `WorkflowCandidate`；语义验证、编译和执行属于后续 M2 阶段。
 
+确定性校验并编译已保存的工作流提议（不调用 LLM，也不发送 HTTP）：
+
+```bash
+.venv/bin/api-doctor validate-workflows \
+  --spec examples/buggy-shop/openapi.yaml \
+  --input runs/m2/workflow-discovery.json \
+  --output runs/m2/validated-workflows.json
+```
+
+校验器确认 operation、成功响应 JSON Pointer、下游参数位置和变量类型均来自当前 `OperationCatalog`，拒绝重复绑定及重复 workflow id。编译结果保存每个可提取响应状态及目标参数 Schema，供运行时再次校验真实值；包含 DELETE 的工作流只标记为需要批准，不会获得隐式执行权限。
+
+在本地服务上执行一条已经发现的工作流：
+
+```bash
+.venv/bin/api-doctor run-workflow \
+  --spec examples/buggy-shop/openapi.yaml \
+  --input runs/m2/workflow-discovery.json \
+  --workflow-id order_create_read \
+  --base-url http://127.0.0.1:18080 \
+  --output runs/m2/workflow-order-run
+```
+
+运行器会重新校验 discovery，生成每一步的合法请求，通过受限 HTTP 工具执行，从成功响应提取变量并分别用响应字段 Schema 和目标参数 Schema 校验，再注入下游请求。失败、提取错误、预算耗尽或未批准的 DELETE 会阻断剩余步骤。输出包含脱敏的 `run.json`、`report.md` 和 `trajectory.jsonl`；只有明确传入 `--approve-delete` 才允许执行 DELETE。
+
 从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
 
 ```bash

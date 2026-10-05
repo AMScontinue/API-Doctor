@@ -36,7 +36,8 @@ def _json_pointer(value: Any, pointer: str) -> Any:
     return current
 
 
-def _extract(body: Any, expression: str) -> Any:
+def extract_response_value(body: Any, expression: str) -> Any:
+    """Evaluate the supported response-body runtime expression."""
     prefix = "$response.body#"
     if not expression.startswith(prefix):
         raise VariableError(f"unsupported Link runtime expression {expression!r}")
@@ -156,7 +157,7 @@ def extract_link_variables(
                     consumer_operation_id=consumer.operation_id,
                     parameter_location=matches[0].location,
                     parameter_name=name,
-                    value=_extract(result.response_body, expression),
+                    value=extract_response_value(result.response_body, expression),
                     producer_operation_id=producer.operation_id,
                     producer_case_id=case.case_id,
                     response_expression=expression,

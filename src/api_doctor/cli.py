@@ -12,21 +12,24 @@ from typing import Any, Callable
 from api_doctor.config import load_dotenv
 from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
+from api_doctor.execution.workflow_runner import run_workflow
 from api_doctor.generation.schema_candidates import generate_schema_candidates
 from api_doctor.generation.rules import load_business_rules
 from api_doctor.generation.semantic_discovery import SemanticDiscovery, discover_semantic_tests
 from api_doctor.generation.workflow_discovery import discover_workflows
+from api_doctor.generation.workflow_models import WorkflowDiscovery
 from api_doctor.llm.deepseek import DeepSeekGateway
 from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
-from api_doctor.reporting.report import save_run_artifacts
+from api_doctor.reporting.report import save_run_artifacts, save_workflow_run_artifacts
 from api_doctor.testspec.fusion import CandidateIssue, fuse_test_cases
 from api_doctor.testspec.openapi_compiler import OpenAPICompileError, compile_openapi_candidate
 from api_doctor.testspec.semantic_validation import (
     SemanticValidationResult,
     validate_semantic_candidates,
 )
+from api_doctor.workflows.validation import validate_workflows
 
 
 DEFAULT_SEED = 20260924
@@ -75,6 +78,26 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
     )
+
+    validate_workflow = commands.add_parser(
+        "validate-workflows",
+        help="validate and compile a saved workflow discovery artifact without HTTP",
+    )
+    _add_spec(validate_workflow, output_required=True)
+    validate_workflow.add_argument("--input", type=Path, required=True)
+
+    run_workflow_command = commands.add_parser(
+        "run-workflow",
+        help="validate and execute one discovered workflow through restricted HTTP",
+    )
+    _add_spec(run_workflow_command, output_required=True)
+    _add_generation_options(run_workflow_command)
+    run_workflow_command.add_argument("--input", type=Path, required=True)
+    run_workflow_command.add_argument("--workflow-id", required=True)
+    run_workflow_command.add_argument("--base-url", required=True)
+    run_workflow_command.add_argument("--max-tests", type=int, default=4)
+    run_workflow_command.add_argument("--timeout", type=float, default=5.0)
+    run_workflow_command.add_argument("--approve-delete", action="store_true")
 
     discover_tests = commands.add_parser(
         "discover-tests",
@@ -167,6 +190,62 @@ def _compile(args: argparse.Namespace, catalog: OperationCatalog) -> None:
 def _discover_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     response = _call_llm_discovery(args, lambda gateway: discover_workflows(catalog, gateway))
     _write_json(_model_response_payload("discovery", response), args.output)
+
+
+def _validate_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    discovery = WorkflowDiscovery.model_validate(payload.get("discovery", payload))
+    result = validate_workflows(discovery.workflows, catalog)
+    _write_json(
+        {
+            "summary": result.summary(),
+            "ambiguities": discovery.ambiguities,
+            "reviews": [review.model_dump(mode="json") for review in result.reviews],
+        },
+        args.output,
+    )
+
+
+def _run_workflow(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    discovery = WorkflowDiscovery.model_validate(payload.get("discovery", payload))
+    validation = validate_workflows(discovery.workflows, catalog)
+    review = next(
+        (
+            item
+            for item in validation.reviews
+            if item.workflow.workflow_id == args.workflow_id
+        ),
+        None,
+    )
+    if review is None:
+        raise SystemExit(f"unknown workflow_id {args.workflow_id!r}")
+    if review.compiled_workflow is None:
+        raise SystemExit(
+            f"workflow {args.workflow_id!r} failed validation: {'; '.join(review.errors)}"
+        )
+    run = run_workflow(
+        review.compiled_workflow,
+        catalog,
+        RunConfig(
+            base_url=args.base_url,
+            seed=args.seed,
+            time_anchor=datetime.fromisoformat(args.time_anchor),
+            max_tests=args.max_tests,
+            approve_delete=args.approve_delete,
+            timeout_seconds=args.timeout,
+        ),
+    )
+    artifacts = save_workflow_run_artifacts(run, args.output)
+    _write_json(
+        {
+            "run_id": run.run_id,
+            "workflow_id": run.workflow_id,
+            "metrics": run.metrics.model_dump(mode="json"),
+            "artifacts": {name: str(path) for name, path in artifacts.items()},
+        },
+        output=None,
+    )
 
 
 def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
@@ -296,6 +375,10 @@ def main() -> None:
         _compile(args, catalog)
     elif args.command == "discover-workflows":
         _discover_workflows(args, catalog)
+    elif args.command == "validate-workflows":
+        _validate_workflows(args, catalog)
+    elif args.command == "run-workflow":
+        _run_workflow(args, catalog)
     elif args.command == "discover-tests":
         _discover_semantic_tests(args, catalog)
     elif args.command == "validate-tests":
