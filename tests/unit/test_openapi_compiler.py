@@ -51,8 +51,8 @@ def test_all_current_buggy_shop_schema_candidates_compile():
         if candidate.status == "compilable"
     ]
 
-    assert len(compiled) == 22
-    assert len({case.case_id for case in compiled}) == 22
+    assert len(compiled) == 27
+    assert len({case.case_id for case in compiled}) == 27
 
 
 def test_negative_candidate_has_valid_baseline_and_targeted_invalid_body():
@@ -68,6 +68,20 @@ def test_negative_candidate_has_valid_baseline_and_targeted_invalid_body():
     assert case.request.body["quantity"] == 101
     assert case.request.body["product_id"] >= 1
     assert case.assertions[0].allowed == [400, 422]
+
+
+def test_compiles_not_found_parameter_probe():
+    catalog, candidates = _catalog_and_candidates()
+    case = compile_openapi_candidate(
+        candidates["schema:getUser:path-id-not-found"],
+        catalog,
+        case_number=1,
+        seed=7,
+        anchor=ANCHOR,
+    )
+
+    assert case.request.path_parameters == {"id": 1_000_000_000}
+    assert case.assertions[0].allowed == [404]
 
 
 def test_compiler_materializes_required_parameters(tmp_path):

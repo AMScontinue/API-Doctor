@@ -35,11 +35,19 @@ class RequestBody(OpenAPIModel):
     json_schema: dict[str, Any] = Field(default_factory=dict, alias="schema")
 
 
+class LinkSpec(OpenAPIModel):
+    name: str
+    operation_id: str
+    parameters: dict[str, str] = Field(default_factory=dict)
+    source_pointer: str
+
+
 class ResponseSpec(OpenAPIModel):
     status_code: str
     description: str = ""
     media_type: str | None = None
     json_schema: dict[str, Any] | None = Field(default=None, alias="schema")
+    links: dict[str, LinkSpec] = Field(default_factory=dict)
 
 
 class SecurityScheme(OpenAPIModel):

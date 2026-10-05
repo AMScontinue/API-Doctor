@@ -13,6 +13,7 @@ import yaml
 from api_doctor.openapi.models import (
     Operation,
     OperationCatalog,
+    LinkSpec,
     Parameter,
     ParseWarning,
     RequestBody,
@@ -119,6 +120,38 @@ def _security_schemes(raw: Any) -> dict[str, SecurityScheme]:
     return result
 
 
+def _links(raw: Any, location: str, warnings: list[ParseWarning]) -> dict[str, LinkSpec]:
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, LinkSpec] = {}
+    for name, link in raw.items():
+        pointer = f"{location}/{_pointer_token(str(name))}"
+        if not isinstance(link, dict) or not isinstance(link.get("operationId"), str):
+            warnings.append(ParseWarning(
+                code="unsupported_link",
+                location=pointer,
+                message="MVP links require an operationId",
+            ))
+            continue
+        parameters = link.get("parameters", {})
+        if not isinstance(parameters, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in parameters.items()
+        ):
+            warnings.append(ParseWarning(
+                code="unsupported_link_parameters",
+                location=pointer,
+                message="link parameters must map names to runtime-expression strings",
+            ))
+            continue
+        result[str(name)] = LinkSpec(
+            name=str(name),
+            operation_id=link["operationId"],
+            parameters=parameters,
+            source_pointer=pointer,
+        )
+    return result
+
+
 def load_openapi(path: Path) -> OperationCatalog:
     """Parse a file and return the stable catalog consumed by later stages."""
     source = path.resolve()
@@ -169,7 +202,13 @@ def load_openapi(path: Path) -> OperationCatalog:
                 if not isinstance(response, dict):
                     continue
                 media_type, schema = _media(response.get("content"), f"{pointer}/responses/{status}/content", warnings)
-                responses.append(ResponseSpec(status_code=str(status), description=str(response.get("description", "")), media_type=media_type, json_schema=schema))
+                responses.append(ResponseSpec(
+                    status_code=str(status),
+                    description=str(response.get("description", "")),
+                    media_type=media_type,
+                    json_schema=schema,
+                    links=_links(response.get("links"), f"{pointer}/responses/{status}/links", warnings),
+                ))
 
             security = raw["security"] if "security" in raw else root_security
             operations[operation_id] = Operation(

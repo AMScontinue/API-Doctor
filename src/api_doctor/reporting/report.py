@@ -60,6 +60,7 @@ def render_markdown(run: BaselineRun) -> str:
                 "",
                 f"- State: `{record.state}`",
                 f"- Purpose: {record.candidate.purpose}",
+                f"- Source: `{record.candidate.source.kind}`",
                 f"- Evidence: `{record.candidate.source.id}`",
             ]
         )

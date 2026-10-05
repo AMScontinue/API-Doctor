@@ -35,10 +35,10 @@ From the repository root, run the deterministic baseline with:
 .venv/bin/api-doctor run \
   --spec examples/buggy-shop/openapi.yaml \
   --base-url http://127.0.0.1:18080 \
-  --max-tests 22 \
+  --max-tests 30 \
   --output runs/m1/baseline
 ```
 
 Order time, amount, and payment-token relations remain natural-language business constraints. They are useful for comparing the deterministic Schema baseline with later semantic and Agent modes.
 
-For the current contract, the clean service produces 22/22 passing deterministic cases. With both defects enabled, the request-body baseline detects `invalid-email-accepted`; detecting `unknown-user-200` requires the upcoming create/query dependency flow or an explicit not-found probe.
+The OpenAPI Links on create responses feed generated IDs into later GET/DELETE happy paths. A current clean run executes 26 cases successfully and blocks four safely: three parameter-boundary candidates lack a declared validation response, and DELETE lacks explicit approval. With both defects enabled, 24 cases pass and two fail: the contract-backed invalid-email check and a heuristic unknown-resource probe. These figures apply only to this example version and saved run.

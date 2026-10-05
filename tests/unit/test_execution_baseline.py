@@ -2,8 +2,11 @@ from datetime import datetime
 from pathlib import Path
 
 from api_doctor.execution.runner import run_baseline
+from api_doctor.execution.models import RunConfig
 from api_doctor.execution.response_validation import validate_response
 from api_doctor.execution.safety import ExecutionPolicy, SafetyViolation
+from api_doctor.execution.variables import LinkBindings
+from api_doctor.generation.schema_candidates import generate_schema_candidates
 from api_doctor.openapi import load_openapi
 from api_doctor.reporting.report import save_run_artifacts
 from api_doctor.testspec.models import (
@@ -21,7 +24,7 @@ ANCHOR = datetime.fromisoformat("2026-10-02T10:00:00+00:00")
 def test_deterministic_runner_executes_budget_and_writes_redacted_artifacts(
     tmp_path, monkeypatch
 ):
-    def fake_execute(case, operation, policy):
+    def fake_execute(case, policy, operation=None):
         del operation
         expected = case.assertions[0].allowed
         return CaseResult(
@@ -31,29 +34,53 @@ def test_deterministic_runner_executes_budget_and_writes_redacted_artifacts(
             expected_statuses=expected,
             request_url=policy.resolve_url(case),
             response_headers={"authorization": "secret"},
+            response_body={"id": 1},
         )
 
-    monkeypatch.setattr("api_doctor.execution.runner.execute_openapi_case", fake_execute)
+    monkeypatch.setattr("api_doctor.execution.runner.execute_case", fake_execute)
     catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
     run = run_baseline(
         catalog,
-        base_url="http://127.0.0.1:18080",
-        seed=7,
-        anchor=ANCHOR,
-        max_tests=6,
+        RunConfig(
+            base_url="http://127.0.0.1:18080",
+            seed=7,
+            time_anchor=ANCHOR,
+            max_tests=6,
+        ),
     )
     paths = save_run_artifacts(run, tmp_path / "run")
 
     assert run.metrics.operations == 5
-    assert run.metrics.candidates == 22
+    assert run.metrics.candidates == 30
     assert run.metrics.executed == 6
-    assert run.metrics.blocked == 16
+    assert run.metrics.blocked == 24
     assert run.metrics.passed + run.metrics.failed + run.metrics.errors == 6
+    get_user = next(
+        record.compiled_case
+        for record in run.records
+        if record.compiled_case and record.compiled_case.operation_id == "getUser"
+    )
+    assert get_user.request.path_parameters == {"id": 1}
+    assert {
+        (item.consumer_operation_id, item.parameter_location, item.parameter_name)
+        for item in run.variables
+    } >= {("getUser", "path", "id"), ("deleteUser", "path", "id")}
     assert paths["json"].exists()
     assert paths["markdown"].exists()
-    assert len(paths["trajectory"].read_text().splitlines()) == 22
+    assert len(paths["trajectory"].read_text().splitlines()) == 30
     assert "## Summary" in paths["markdown"].read_text()
     assert "secret" not in paths["json"].read_text()
+
+
+def test_link_producers_are_ordered_before_consumers():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    catalog.operations = dict(reversed(catalog.operations.items()))
+
+    ordered = LinkBindings(catalog).order_candidates(generate_schema_candidates(catalog))
+    operation_ids = [candidate.operation_id for candidate in ordered]
+
+    assert operation_ids.index("createUser") < operation_ids.index("getUser")
+    assert operation_ids.index("createOrder") < operation_ids.index("getOrder")
 
 
 def test_execution_policy_rejects_bad_base_urls_and_cross_origin():

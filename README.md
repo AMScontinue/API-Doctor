@@ -53,7 +53,7 @@ Docker Compose 仅作为后续可选的一键复现方式。
   --output runs/inspect/buggy-shop-candidates.json
 ```
 
-当前生成正常路径、缺失必填字段、数值边界、非法枚举、格式、字符串长度和数组约束候选。负向场景没有 OpenAPI 声明的可依据验证状态码时，候选会保留但标记为 `not_compilable`，不猜测 400/422。
+当前生成正常路径、缺失必填字段、数值边界、非法枚举、格式、字符串长度、数组约束和参数边界候选。负向场景没有 OpenAPI 声明的可依据验证状态码时，候选会保留但标记为 `not_compilable`，不猜测 400/422。对声明 404 的 GET 资源接口会生成“不存在资源”探针，但因无法仅凭契约证明任意值一定不存在，其结果明确标记为 `heuristic`。
 
 将可编译候选物化为确定性 HTTP 请求：
 
@@ -73,11 +73,11 @@ Docker Compose 仅作为后续可选的一键复现方式。
 .venv/bin/api-doctor run \
   --spec examples/buggy-shop/openapi.yaml \
   --base-url http://127.0.0.1:18080 \
-  --max-tests 22 \
+  --max-tests 30 \
   --output runs/m1/baseline
 ```
 
-运行会生成 `run.json`、`report.md` 和 `trajectory.jsonl`。请求受 base URL 同源、重定向、超时、响应大小、方法和 DELETE 显式批准策略约束；响应会校验状态码、Content-Type 和对应 OpenAPI response Schema。
+运行会生成 `run.json`、`report.md` 和 `trajectory.jsonl`。OpenAPI Links 可以把创建接口的响应值传给后续查询或删除接口，并在 run artifact 中保留变量来源。请求受 base URL 同源、重定向、超时、响应大小、方法和 DELETE 显式批准策略约束；响应会校验状态码、Content-Type 和对应 OpenAPI response Schema。
 
 ## M0 技术验证
 

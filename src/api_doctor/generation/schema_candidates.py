@@ -9,8 +9,11 @@ from api_doctor.testspec.models import (
     Boundary,
     Expected,
     OmitField,
+    OmitParameter,
+    ParameterBoundary,
     SemanticTestCandidate,
     SetValue,
+    SetParameter,
     Source,
     UseBaseline,
 )
@@ -39,9 +42,10 @@ def _candidate(
     *,
     suffix: str,
     purpose: str,
-    mutation: UseBaseline | SetValue | OmitField | Boundary,
+    mutation: UseBaseline | SetValue | OmitField | Boundary | SetParameter | OmitParameter | ParameterBoundary,
     status_codes: list[int],
     evidence_ref: str,
+    source_kind: str = "openapi",
 ) -> SemanticTestCandidate:
     rule_id = f"schema:{operation.operation_id}:{suffix}"
     if not status_codes:
@@ -50,7 +54,7 @@ def _candidate(
             status="not_compilable",
             operation_id=operation.operation_id,
             purpose=purpose,
-            source=Source(kind="openapi", id=evidence_ref),
+            source=Source(kind=source_kind, id=evidence_ref),
             unsupported_reason="OpenAPI does not declare an evidence-backed response status for this scenario",
         )
     return SemanticTestCandidate(
@@ -60,7 +64,7 @@ def _candidate(
         purpose=purpose,
         mutations=[mutation],
         expected=Expected(status_codes=status_codes),
-        source=Source(kind="openapi", id=evidence_ref),
+        source=Source(kind=source_kind, id=evidence_ref),
     )
 
 
@@ -241,16 +245,81 @@ def _field_candidates(
             )
 
 
+def _parameter_candidates(operation: Operation) -> Iterable[SemanticTestCandidate]:
+    negative = _negative_codes(operation)
+    declared = {response.status_code for response in operation.responses}
+    for parameter in operation.parameters:
+        pointer = f"{operation.source_pointer}/parameters/{parameter.location}/{parameter.name}"
+        suffix = f"{parameter.location}-{parameter.name}"
+        if parameter.required and parameter.location != "path":
+            yield _candidate(
+                operation,
+                suffix=f"missing-{suffix}",
+                purpose=f"Verify required {parameter.location} parameter {parameter.name!r} is rejected",
+                mutation=OmitParameter(
+                    kind="omit_parameter", location=parameter.location, name=parameter.name
+                ),
+                status_codes=negative,
+                evidence_ref=f"{pointer}/required",
+            )
+        if "minimum" in parameter.json_schema:
+            yield _candidate(
+                operation,
+                suffix=f"{suffix}-below-minimum",
+                purpose=f"Verify {parameter.location} parameter {parameter.name!r} below minimum is rejected",
+                mutation=ParameterBoundary(
+                    kind="parameter_boundary",
+                    location=parameter.location,
+                    name=parameter.name,
+                    position="below_minimum",
+                ),
+                status_codes=negative,
+                evidence_ref=f"{pointer}/schema/minimum",
+            )
+        if "maximum" in parameter.json_schema:
+            yield _candidate(
+                operation,
+                suffix=f"{suffix}-above-maximum",
+                purpose=f"Verify {parameter.location} parameter {parameter.name!r} above maximum is rejected",
+                mutation=ParameterBoundary(
+                    kind="parameter_boundary",
+                    location=parameter.location,
+                    name=parameter.name,
+                    position="above_maximum",
+                ),
+                status_codes=negative,
+                evidence_ref=f"{pointer}/schema/maximum",
+            )
+        if (
+            operation.method == "GET"
+            and parameter.location == "path"
+            and "404" in declared
+        ):
+            missing_value: Any = (
+                1_000_000_000
+                if parameter.json_schema.get("type") in {"integer", "number"}
+                else "__api_doctor_missing__"
+            )
+            yield _candidate(
+                operation,
+                suffix=f"{suffix}-not-found",
+                purpose=f"Verify an unknown resource value for {parameter.name!r} returns 404",
+                mutation=SetParameter(
+                    kind="set_parameter",
+                    location="path",
+                    name=parameter.name,
+                    value=missing_value,
+                ),
+                status_codes=[404],
+                evidence_ref=f"{operation.source_pointer}/responses/404",
+                source_kind="heuristic",
+            )
+
+
 def generate_schema_candidates(catalog: OperationCatalog) -> list[SemanticTestCandidate]:
     """Generate stable candidates for supported top-level JSON request constraints."""
     candidates: list[SemanticTestCandidate] = []
     for operation in catalog.operations.values():
-        request_body = operation.request_body
-        if request_body is None or request_body.media_type != "application/json":
-            continue
-        schema = request_body.json_schema
-        if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
-            continue
         success = _declared_codes(operation, 2)
         candidates.append(
             _candidate(
@@ -262,6 +331,13 @@ def generate_schema_candidates(catalog: OperationCatalog) -> list[SemanticTestCa
                 evidence_ref=f"{operation.source_pointer}/responses",
             )
         )
+        candidates.extend(_parameter_candidates(operation))
+        request_body = operation.request_body
+        if request_body is None or request_body.media_type != "application/json":
+            continue
+        schema = request_body.json_schema
+        if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
+            continue
         required = set(schema.get("required", []))
         for field, field_schema in schema["properties"].items():
             if isinstance(field_schema, dict):

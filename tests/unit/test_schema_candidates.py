@@ -2,12 +2,12 @@ from datetime import datetime
 from pathlib import Path
 
 from api_doctor.generation.schema_candidates import generate_schema_candidates
+from api_doctor.evaluation.models import BenchmarkOperation
 from api_doctor.openapi import load_openapi
 from api_doctor.testspec.compiler import compile_candidate
 from api_doctor.testspec.models import (
     Boundary,
     OmitField,
-    Operation as CompilerOperation,
     SetValue,
     UseBaseline,
 )
@@ -37,13 +37,18 @@ def test_buggy_shop_schema_generates_deterministic_candidates():
     assert enum.mutations[0].value not in {"cash", "card"}
     assert enum.expected.status_codes == [400, 422]
     assert enum.source.kind == "openapi"
+    assert candidates["schema:getUser:happy-path"].status == "compilable"
+    not_found = candidates["schema:getUser:path-id-not-found"]
+    assert not_found.expected.status_codes == [404]
+    assert not_found.mutations[0].kind == "set_parameter"
+    assert not_found.source.kind == "heuristic"
 
 
 def test_use_baseline_candidate_is_accepted_by_existing_compiler():
     catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
     candidate = _by_id(generate_schema_candidates(catalog))["schema:createUser:happy-path"]
     operation = catalog.get("createUser")
-    compiler_operation = CompilerOperation(
+    compiler_operation = BenchmarkOperation(
         operation_id=operation.operation_id,
         method=operation.method,
         path=operation.path,
@@ -58,7 +63,7 @@ def test_use_baseline_candidate_is_accepted_by_existing_compiler():
         anchor=datetime.fromisoformat("2026-10-02T10:00:00+00:00"),
     )
 
-    assert case.body == {"name": "test-name", "email": "email@example.test"}
+    assert case.request.body == {"name": "test-name-8", "email": "email-9@example.test"}
     assert case.assertions[0].allowed == [201]
 
 

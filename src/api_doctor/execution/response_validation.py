@@ -2,32 +2,10 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
-
 from api_doctor.openapi.models import Operation, ResponseSpec
-
-
-def _validation_schema(value: Any) -> Any:
-    if isinstance(value, list):
-        return [_validation_schema(item) for item in value]
-    if not isinstance(value, dict):
-        return deepcopy(value)
-    result = {key: _validation_schema(item) for key, item in value.items() if key != "nullable"}
-    for bound in ("Minimum", "Maximum"):
-        exclusive_key = f"exclusive{bound}"
-        regular_key = bound[0].lower() + bound[1:]
-        exclusive = result.get(exclusive_key)
-        if isinstance(exclusive, bool):
-            if exclusive and regular_key in result:
-                result[exclusive_key] = result.pop(regular_key)
-            else:
-                result.pop(exclusive_key, None)
-    if value.get("nullable") is True and isinstance(result.get("type"), str):
-        result["type"] = [result["type"], "null"]
-    return result
+from api_doctor.openapi.schema_validation import schema_errors
 
 
 def _response_for(operation: Operation, status: int) -> ResponseSpec | None:
@@ -57,10 +35,7 @@ def validate_response(
             f"Content-Type {content_type or '<missing>'!r} does not match {response.media_type!r}"
         )
     if response.json_schema is not None:
-        validator = Draft202012Validator(
-            _validation_schema(response.json_schema), format_checker=FormatChecker()
-        )
-        for error in validator.iter_errors(body):
+        for error in schema_errors(response.json_schema, body):
             location = "$" + "".join(f"[{item!r}]" for item in error.absolute_path)
             violations.append(f"response schema violation at {location}: {error.message}")
     return violations

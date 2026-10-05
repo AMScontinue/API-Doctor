@@ -1,6 +1,15 @@
-"""Metrics emitted by the M0 benchmark runner."""
+"""Synthetic catalog and metrics used only by the M0 benchmark."""
+
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class BenchmarkOperation(BaseModel):
+    operation_id: str
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+    path: str
+    request_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelUsage(BaseModel):

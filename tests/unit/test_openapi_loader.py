@@ -66,6 +66,13 @@ def test_buggy_shop_contract_excludes_manual_reset_endpoint():
         "getOrder",
     }
     assert all(operation.path != "/test/reset" for operation in catalog.operations.values())
+    created = next(
+        response for response in catalog.get("createUser").responses if response.status_code == "201"
+    )
+    assert created.links["GetCreatedUser"].operation_id == "getUser"
+    assert created.links["GetCreatedUser"].parameters == {
+        "id": "$response.body#/id"
+    }
 
 
 def test_loads_json_and_generates_stable_operation_id(tmp_path):

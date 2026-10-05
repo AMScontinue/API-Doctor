@@ -23,6 +23,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
+          links:
+            GetCreatedUser:
+              operationId: getUser
+              parameters:
+                id: "$response.body#/id"
+            DeleteCreatedUser:
+              operationId: deleteUser
+              parameters:
+                id: "$response.body#/id"
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":
@@ -71,6 +80,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
+          links:
+            GetCreatedOrder:
+              operationId: getOrder
+              parameters:
+                id: "$response.body#/id"
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":

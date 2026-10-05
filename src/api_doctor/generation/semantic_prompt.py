@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 
-from api_doctor.testspec.models import Operation, RuleRecord, SemanticTestCandidate
+from api_doctor.evaluation.models import BenchmarkOperation
+from api_doctor.testspec.models import RuleRecord, SemanticTestCandidate
 
 
 def build_semantic_prompt(
-    rule: RuleRecord, operations: dict[str, Operation]
+    rule: RuleRecord, operations: dict[str, BenchmarkOperation]
 ) -> dict[str, object]:
     return {
         "task": "Convert one business rule into the supported TestSpec candidate. Return not_compilable only when no valid combination of supported mutations can represent it. Never invent operation IDs or fields.",

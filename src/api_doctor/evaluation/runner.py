@@ -11,9 +11,10 @@ import yaml
 from pydantic import ValidationError
 
 from api_doctor.evaluation.models import EvaluationMetrics, ModelUsage, SpikeMetrics
+from api_doctor.evaluation.catalog import load_operations
 from api_doctor.execution.http import execute_case
+from api_doctor.execution.safety import ExecutionPolicy
 from api_doctor.generation.semantic_extractor import Extractor
-from api_doctor.openapi.catalog import load_operations
 from api_doctor.testspec.compiler import CompileError, compile_candidate
 from api_doctor.testspec.models import RuleRecord
 from api_doctor.testspec.validation import validate_candidate_context
@@ -155,7 +156,7 @@ def run_spike(
                     evaluation.semantic_mismatches += 1
             record["compiled_case"] = case.model_dump(mode="json")
             if base_url:
-                result = execute_case(case, base_url)
+                result = execute_case(case, ExecutionPolicy(base_url=base_url))
                 executed += 1
                 passed += result.outcome == "passed"
                 failed += result.outcome == "failed"

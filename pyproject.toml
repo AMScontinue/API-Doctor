@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "api-doctor"
 version = "0.1.0"
-description = "OpenAPI semantic TestSpec technical spike"
+description = "Deterministic OpenAPI testing and agentic fault analysis"
 requires-python = ">=3.11"
 dependencies = [
   "jsonschema[format]>=4.23,<5",
@@ -17,8 +17,8 @@ dependencies = [
 dev = ["pytest>=8.3,<9"]
 
 [project.scripts]
-api-doctor = "api_doctor.app_cli:main"
-api-doctor-m0 = "api_doctor.cli:main"
+api-doctor = "api_doctor.cli:main"
+api-doctor-m0 = "api_doctor.evaluation.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

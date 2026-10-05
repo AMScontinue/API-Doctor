@@ -6,18 +6,21 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
-
-from api_doctor.openapi.models import Operation, OperationCatalog
+from api_doctor.openapi.models import Operation, OperationCatalog, Parameter
+from api_doctor.openapi.schema_validation import schema_errors
 from api_doctor.testspec.models import (
     Assertion,
     Boundary,
     CompiledRequest,
     CompiledTestCase,
     FieldRelation,
+    Mutation,
     OmitField,
+    OmitParameter,
+    ParameterBoundary,
     SemanticTestCandidate,
     SetValue,
+    SetParameter,
     UseBaseline,
 )
 from api_doctor.testspec.value_generator import ValueGenerationError, generate_value
@@ -43,7 +46,11 @@ def _field(path: str, schema: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def _request_baseline(
-    operation: Operation, *, seed: int, anchor: datetime
+    operation: Operation,
+    *,
+    seed: int,
+    anchor: datetime,
+    parameter_overrides: dict[tuple[str, str], Any] | None = None,
 ) -> CompiledRequest:
     locations: dict[str, dict[str, Any]] = {
         "path": {},
@@ -62,6 +69,22 @@ def _request_baseline(
                 )
             except ValueGenerationError as exc:
                 raise OpenAPICompileError(f"cannot generate parameter {parameter.name!r}: {exc}") from exc
+    for (location, name), value in (parameter_overrides or {}).items():
+        if location not in locations:
+            raise OpenAPICompileError(f"unsupported parameter override location {location!r}")
+        parameter = next(
+            (
+                item
+                for item in operation.parameters
+                if item.location == location and item.name == name
+            ),
+            None,
+        )
+        if parameter is None:
+            raise OpenAPICompileError(
+                f"unknown {location} parameter {name!r} for {operation.operation_id}"
+            )
+        locations[location][name] = deepcopy(value)
 
     body = None
     if operation.request_body:
@@ -87,31 +110,7 @@ def _request_baseline(
 
 
 def _validate(schema: dict[str, Any], value: Any) -> list[str]:
-    validator = Draft202012Validator(_validation_schema(schema), format_checker=FormatChecker())
-    return [error.message for error in validator.iter_errors(value)]
-
-
-def _validation_schema(value: Any) -> Any:
-    """Translate the small OpenAPI 3.0 differences used by the MVP validator."""
-    if isinstance(value, list):
-        return [_validation_schema(item) for item in value]
-    if not isinstance(value, dict):
-        return deepcopy(value)
-    result = {key: _validation_schema(item) for key, item in value.items() if key != "nullable"}
-    for bound in ("Minimum", "Maximum"):
-        exclusive_key = f"exclusive{bound}"
-        regular_key = bound[0].lower() + bound[1:]
-        exclusive = result.get(exclusive_key)
-        if isinstance(exclusive, bool):
-            if exclusive and regular_key in result:
-                result[exclusive_key] = result.pop(regular_key)
-            else:
-                result.pop(exclusive_key, None)
-    if value.get("nullable") is True:
-        original_type = result.get("type")
-        if isinstance(original_type, str):
-            result["type"] = [original_type, "null"]
-    return result
+    return [error.message for error in schema_errors(schema, value)]
 
 
 def _relation_delta(relation: FieldRelation) -> timedelta | int | float:
@@ -155,15 +154,15 @@ def _apply_relation(
 def _apply_mutations(
     body: Any,
     schema: dict[str, Any],
-    candidate: SemanticTestCandidate,
+    mutations: list[Mutation],
     anchor: datetime,
 ) -> Any:
     if not isinstance(body, dict):
-        if all(isinstance(item, UseBaseline) for item in candidate.mutations):
+        if all(isinstance(item, UseBaseline) for item in mutations):
             return body
         raise OpenAPICompileError("body mutations require an object request schema")
     mutated = deepcopy(body)
-    for mutation in candidate.mutations:
+    for mutation in mutations:
         if isinstance(mutation, UseBaseline):
             continue
         if isinstance(mutation, SetValue):
@@ -187,6 +186,72 @@ def _apply_mutations(
     return mutated
 
 
+def _parameter(operation: Operation, location: str, name: str) -> Parameter:
+    parameter = next(
+        (
+            item
+            for item in operation.parameters
+            if item.location == location and item.name == name
+        ),
+        None,
+    )
+    if parameter is None:
+        raise OpenAPICompileError(f"unknown {location} parameter {name!r}")
+    return parameter
+
+
+def _parameter_values(request: CompiledRequest, location: str) -> dict[str, Any]:
+    return {
+        "path": request.path_parameters,
+        "query": request.query_parameters,
+        "header": request.headers,
+        "cookie": request.cookies,
+    }[location]
+
+
+def _validate_parameters(operation: Operation, request: CompiledRequest) -> list[str]:
+    errors: list[str] = []
+    for parameter in operation.parameters:
+        values = _parameter_values(request, parameter.location)
+        if parameter.required and parameter.name not in values:
+            errors.append(f"required {parameter.location} parameter {parameter.name!r} is missing")
+            continue
+        if parameter.name in values:
+            errors.extend(
+                f"{parameter.location} parameter {parameter.name!r}: {message}"
+                for message in _validate(parameter.json_schema, values[parameter.name])
+            )
+    return errors
+
+
+def _apply_parameter_mutations(
+    request: CompiledRequest,
+    operation: Operation,
+    candidate: SemanticTestCandidate,
+) -> None:
+    for mutation in candidate.mutations:
+        if isinstance(mutation, SetParameter):
+            _parameter(operation, mutation.location, mutation.name)
+            _parameter_values(request, mutation.location)[mutation.name] = deepcopy(mutation.value)
+        elif isinstance(mutation, OmitParameter):
+            _parameter(operation, mutation.location, mutation.name)
+            _parameter_values(request, mutation.location).pop(mutation.name, None)
+        elif isinstance(mutation, ParameterBoundary):
+            parameter = _parameter(operation, mutation.location, mutation.name)
+            values = _parameter_values(request, mutation.location)
+            if mutation.position == "below_minimum":
+                if "minimum" not in parameter.json_schema:
+                    raise OpenAPICompileError(f"parameter {mutation.name!r} has no minimum")
+                values[mutation.name] = parameter.json_schema["minimum"] - 1
+            else:
+                if "maximum" not in parameter.json_schema:
+                    raise OpenAPICompileError(f"parameter {mutation.name!r} has no maximum")
+                values[mutation.name] = parameter.json_schema["maximum"] + 1
+
+
+BODY_MUTATIONS = (UseBaseline, SetValue, OmitField, Boundary, FieldRelation)
+
+
 def compile_openapi_candidate(
     candidate: SemanticTestCandidate,
     catalog: OperationCatalog,
@@ -194,6 +259,7 @@ def compile_openapi_candidate(
     case_number: int,
     seed: int,
     anchor: datetime,
+    parameter_overrides: dict[tuple[str, str], Any] | None = None,
 ) -> CompiledTestCase:
     """Materialize one candidate and verify its baseline/mutation invariants."""
     if candidate.status != "compilable" or not candidate.operation_id:
@@ -204,21 +270,49 @@ def compile_openapi_candidate(
     if candidate.expected is None:
         raise OpenAPICompileError("candidate has no evidence-backed expectation")
 
-    request = _request_baseline(operation, seed=seed, anchor=anchor)
+    request = _request_baseline(
+        operation,
+        seed=seed,
+        anchor=anchor,
+        parameter_overrides=parameter_overrides,
+    )
+    baseline_parameter_errors = _validate_parameters(operation, request)
+    if baseline_parameter_errors:
+        raise OpenAPICompileError(
+            f"generated parameter baseline is not schema-valid: {baseline_parameter_errors[0]}"
+        )
+    _apply_parameter_mutations(request, operation, candidate)
+    parameter_errors = _validate_parameters(operation, request)
     schema = _body_schema(operation)
     if schema is not None:
         baseline_errors = _validate(schema, request.body)
         if baseline_errors:
             raise OpenAPICompileError(f"generated baseline is not schema-valid: {baseline_errors[0]}")
-        request.body = _apply_mutations(request.body, schema, candidate, anchor)
-        is_happy_path = all(isinstance(item, UseBaseline) for item in candidate.mutations)
+        body_mutations = [
+            mutation for mutation in candidate.mutations if isinstance(mutation, BODY_MUTATIONS)
+        ]
+        request.body = _apply_mutations(request.body, schema, body_mutations, anchor)
         mutation_errors = _validate(schema, request.body)
-        if is_happy_path and mutation_errors:
+        if candidate.is_baseline and mutation_errors:
             raise OpenAPICompileError(f"happy-path request became invalid: {mutation_errors[0]}")
-        if candidate.source.kind == "openapi" and not is_happy_path and not mutation_errors:
+        if (
+            candidate.source.kind == "openapi"
+            and not candidate.is_baseline
+            and not mutation_errors
+            and not parameter_errors
+        ):
             raise OpenAPICompileError("OpenAPI negative mutation did not violate its request schema")
-    elif any(not isinstance(item, UseBaseline) for item in candidate.mutations):
+    elif any(
+        isinstance(item, (SetValue, OmitField, Boundary, FieldRelation))
+        for item in candidate.mutations
+    ):
         raise OpenAPICompileError("candidate mutates a request body that the operation does not define")
+    elif (
+        candidate.source.kind == "openapi"
+        and not candidate.is_baseline
+        and not parameter_errors
+    ):
+        raise OpenAPICompileError("OpenAPI negative mutation did not violate its parameter schema")
 
     return CompiledTestCase(
         case_id=f"TC-OAS-{case_number:03d}",

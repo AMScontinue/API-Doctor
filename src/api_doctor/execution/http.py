@@ -1,22 +1,18 @@
-"""Restricted HTTP execution for legacy M0 and normalized OpenAPI cases."""
+"""Restricted HTTP execution for compiled test cases."""
 
 from __future__ import annotations
 
 import json
-import logging
 import socket
 from time import perf_counter
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from api_doctor.execution.response_validation import validate_response
 from api_doctor.execution.safety import ExecutionPolicy, SafetyViolation
 from api_doctor.observability import redact
 from api_doctor.openapi.models import Operation
 from api_doctor.testspec.models import CompiledTestCase, TestResult
-
-
-logger = logging.getLogger(__name__)
 
 
 class _SameOriginRedirectHandler(HTTPRedirectHandler):
@@ -46,13 +42,14 @@ def _request(case: CompiledTestCase, target_url: str) -> Request:
         if case.request.body is not None
         else None
     )
-    return Request(target_url, data=data, headers=headers, method=case.method)
+    return Request(target_url, data=data, headers=headers, method=case.request.method)
 
 
-def execute_openapi_case(
+def execute_case(
     case: CompiledTestCase,
-    operation: Operation,
     policy: ExecutionPolicy,
+    *,
+    operation: Operation | None = None,
 ) -> TestResult:
     expected = case.assertions[0].allowed
     try:
@@ -107,14 +104,15 @@ def execute_openapi_case(
     violations = []
     if status not in expected:
         violations.append(f"status {status} is not in expected set {expected}")
-    violations.extend(
-        validate_response(
-            operation,
-            status=status,
-            headers=response_headers,
-            body=body,
+    if operation is not None:
+        violations.extend(
+            validate_response(
+                operation,
+                status=status,
+                headers=response_headers,
+                body=body,
+            )
         )
-    )
     return TestResult(
         case_id=case.case_id,
         outcome="failed" if violations else "passed",
@@ -126,51 +124,3 @@ def execute_openapi_case(
         duration_ms=duration_ms,
         violations=violations,
     )
-
-
-def execute_case(case: CompiledTestCase, base_url: str) -> TestResult:
-    """Legacy status-only M0 executor retained for benchmark comparability."""
-    policy = ExecutionPolicy(base_url=base_url)
-    target_url = policy.resolve_url(case)
-    request = _request(case, target_url)
-    logger.debug("[HTTP] request case=%s method=%s url=%s", case.case_id, case.method, target_url)
-    started = perf_counter()
-    try:
-        with urlopen(request, timeout=policy.timeout_seconds) as response:
-            status = response.status
-            raw_body = response.read(policy.max_response_bytes + 1)
-    except HTTPError as error:
-        status = error.code
-        raw_body = error.read(policy.max_response_bytes + 1)
-    duration_ms = round((perf_counter() - started) * 1000)
-    if len(raw_body) > policy.max_response_bytes:
-        return TestResult(
-            case_id=case.case_id,
-            outcome="error",
-            actual_status=status,
-            expected_statuses=case.assertions[0].allowed,
-            error=f"response exceeded {policy.max_response_bytes} bytes",
-        )
-    try:
-        body = json.loads(raw_body) if raw_body else None
-    except json.JSONDecodeError:
-        body = raw_body.decode("utf-8", errors="replace")
-    allowed = case.assertions[0].allowed
-    result = TestResult(
-        case_id=case.case_id,
-        outcome="passed" if status in allowed else "failed",
-        actual_status=status,
-        expected_statuses=allowed,
-        response_body=body,
-        request_url=target_url,
-        duration_ms=duration_ms,
-    )
-    logger.debug(
-        "[HTTP] response case=%s status=%d expected=%s outcome=%s duration_ms=%d",
-        case.case_id,
-        status,
-        allowed,
-        result.outcome,
-        duration_ms,
-    )
-    return result

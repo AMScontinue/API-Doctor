@@ -1003,6 +1003,9 @@ OpenAPI 规则引擎 ─────┐
 - `set_value`：设置通过 Schema 校验的值；
 - `omit_field`：删除字段；
 - `boundary`：生成最小值、最大值及相邻无效值；
+- `set_parameter` / `omit_parameter`：设置或删除 query/header/cookie/path 参数，path 参数不允许删除；
+- `parameter_boundary`：生成参数 Schema 边界外的值；
+- 不存在资源探针使用 `set_parameter` 表达，不增加一个行为完全相同的 mutation 类型；仅有 404 契约不能证明具体值必然不存在，因此其 source 标记为启发式证据；
 - `field_relation`：两个数字或日期字段之间的 `lt/lte/eq/ne/gte/gt`；
 - `reuse_variable`：引用前序响应中经过验证的变量；
 - `workflow`：执行两到四步 operation 序列；
@@ -1128,13 +1131,13 @@ api-test-agent/
 │       ├── openapi/
 │       │   ├── loader.py
 │       │   ├── resolver.py
-│       │   ├── catalog.py
+│       │   ├── schema_validation.py
 │       │   └── models.py
 │       ├── testspec/
 │       │   ├── models.py
 │       │   ├── compiler.py
-│       │   ├── generators.py
-│       │   ├── mutations.py
+│       │   ├── openapi_compiler.py
+│       │   ├── value_generator.py
 │       │   └── validation.py
 │       ├── generation/
 │       │   ├── schema_candidates.py
@@ -1142,7 +1145,8 @@ api-test-agent/
 │       │   └── semantic_prompt.py
 │       ├── execution/
 │       │   ├── http.py
-│       │   ├── auth.py
+│       │   ├── models.py
+│       │   ├── runner.py
 │       │   ├── safety.py
 │       │   ├── variables.py
 │       │   └── response_validation.py
@@ -1161,6 +1165,8 @@ api-test-agent/
 │       │   ├── gateway.py
 │       │   └── deepseek.py
 │       └── evaluation/
+│           ├── catalog.py
+│           ├── cli.py
 │           ├── models.py
 │           └── runner.py
 ├── examples/
@@ -1262,7 +1268,7 @@ M1-C 候选编译当前实现状态（2026-10-04）：
 - 已实现 `compile_openapi_candidate`，直接使用 `OperationCatalog`，生成分离 path/query/header/cookie/body 的正式 `CompiledTestCase`；
 - 编译前验证合法基线，编译后验证 happy path 仍合法，并确认 OpenAPI 负向 mutation 确实违反目标 request Schema；
 - 无可靠生成策略的 `pattern` 字段会明确阻塞，需由 example/default/fixture 提供合法值，不猜测；
-- M0 `compile_candidate` 仍作 benchmark 兼容层保留，但已使用新的 `CompiledRequest` 输出结构。
+- M0 `compile_candidate` 仅作 benchmark 适配入口：将合成 operation 转为 `OperationCatalog` 后委托给正式 OpenAPI 编译器，不再维护第二套 mutation 编译逻辑。
 
 M1-D 确定性执行基线当前实现状态（2026-10-04）：
 
@@ -1280,6 +1286,16 @@ M1-E 演示服务扩展当前实现状态（2026-10-05）：
 - 正式 OpenAPI 已扩展为 5 个业务 operation，包含 path parameter、200/201/204/400/404/422 响应与完整请求/响应 Schema；
 - Go 测试覆盖用户生命周期、订单生命周期、缺陷开关和 test-mode reset。跨接口变量提取与依赖执行留在下一子阶段，不写死演示服务 operationId。
 - 真实对照运行中，默认无缺陷服务为 22/22 passed；开启两个缺陷后为 21 passed、1 failed，确定性 baseline 发现 `invalid-email-accepted`。`unknown-user-200` 尚未被当前只针对 request-body Schema 的候选触发，需要下一阶段的跨接口变量和不存在资源探针；两组数据仅对当前示例版本和对应 run 有效。
+
+M1-F 参数与跨接口依赖当前实现状态（2026-10-05）：
+
+- `OperationCatalog` 已解析 OpenAPI response Links，支持 `$response.body#/<pointer>` 形式的参数映射；
+- Schema 规则已生成参数缺失、参数边界和 GET 不存在资源候选，编译器可将参数 mutation 物化为 path/query/header/cookie 具体值；
+- 执行器从成功的上游响应提取变量，仅向 Links 指定的下游 happy path 注入，并在 `run.json` 保存生产者、消费者、表达式和值的来源；缺少变量时安全阻塞而不猜测；
+- Links 的生产者会在消费者之前稳定执行，不依赖 OpenAPI paths 的书写顺序；循环依赖保持原始稳定顺序，缺少变量时仍按阻塞处理；
+- 不存在资源值仅是高概率探针，不能单凭 OpenAPI 证明，因此证据类型标记为 `heuristic`，失败应解读为风险而非确定缺陷；
+- M1 收尾重构后，M0 合成 benchmark 与正式 OpenAPI 候选共用同一编译器和 HTTP 执行器；JSON Schema 校验也使用同一适配层。M0 fixture、held-out 与 DeepSeek 指标仍作 LLM 回归资产保留，不进入正式 `run` 路径；
+- 实际无缺陷对照运行为 30 candidates、27 compilable、26 executed、26 passed、4 blocked；两个缺陷开启时为 26 executed、24 passed、2 failed、0 error、4 blocked。四个 blocked 为三个缺少契约状态码依据的参数边界候选，以及未获 DELETE 显式批准的用例；数据仅对当前示例版本和对应保存 run 有效。
 
 M1 完成后项目是“OpenAPI 确定性测试器 + LLM 语义 TestSpec 生成器”，具备 LLM 工程价值，但执行计划仍固定，不单独宣称已经形成完整 Agent。M1 的职责是为 M2 提供可信、可复用、受安全约束的工具层。
 

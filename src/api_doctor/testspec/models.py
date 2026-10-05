@@ -19,6 +19,26 @@ class UseBaseline(StrictModel):
     kind: Literal["use_baseline"]
 
 
+class SetParameter(StrictModel):
+    kind: Literal["set_parameter"]
+    location: Literal["path", "query", "header", "cookie"]
+    name: str
+    value: JsonValue
+
+
+class OmitParameter(StrictModel):
+    kind: Literal["omit_parameter"]
+    location: Literal["query", "header", "cookie"]
+    name: str
+
+
+class ParameterBoundary(StrictModel):
+    kind: Literal["parameter_boundary"]
+    location: Literal["path", "query", "header", "cookie"]
+    name: str
+    position: Literal["below_minimum", "above_maximum"]
+
+
 class SetValue(StrictModel):
     kind: Literal["set_value"]
     path: str = Field(pattern=r"^\$\.[A-Za-z_][A-Za-z0-9_]*$")
@@ -50,7 +70,14 @@ class FieldRelation(StrictModel):
 
 
 Mutation = Annotated[
-    UseBaseline | SetValue | OmitField | Boundary | FieldRelation,
+    UseBaseline
+    | SetParameter
+    | OmitParameter
+    | ParameterBoundary
+    | SetValue
+    | OmitField
+    | Boundary
+    | FieldRelation,
     Field(discriminator="kind"),
 ]
 
@@ -85,12 +112,11 @@ class SemanticTestCandidate(StrictModel):
             raise ValueError("not_compilable candidate requires unsupported_reason")
         return self
 
-
-class Operation(StrictModel):
-    operation_id: str
-    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
-    path: str
-    request_schema: dict[str, Any] = Field(default_factory=dict)
+    @property
+    def is_baseline(self) -> bool:
+        return bool(self.mutations) and all(
+            isinstance(mutation, UseBaseline) for mutation in self.mutations
+        )
 
 
 class Assertion(StrictModel):
@@ -122,21 +148,6 @@ class CompiledTestCase(StrictModel):
     risk: Literal["safe", "requires_approval"] = "safe"
     seed: int
     time_anchor: datetime
-
-    @property
-    def method(self) -> str:
-        """Compatibility view for the M0 executor."""
-        return self.request.method
-
-    @property
-    def path(self) -> str:
-        """Compatibility view for the M0 executor."""
-        return self.request.path_template
-
-    @property
-    def body(self) -> JsonValue:
-        """Compatibility view for M0 tests and reports."""
-        return self.request.body
 
 
 class TestResult(StrictModel):

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from api_doctor.testspec.models import FieldRelation, Operation, RuleRecord, SemanticTestCandidate
+from api_doctor.evaluation.models import BenchmarkOperation
+from api_doctor.testspec.models import FieldRelation, RuleRecord, SemanticTestCandidate
 
 
 class CandidateContextError(ValueError):
@@ -12,7 +13,7 @@ class CandidateContextError(ValueError):
 def validate_candidate_context(
     candidate: SemanticTestCandidate,
     rule: RuleRecord,
-    operations: dict[str, Operation],
+    operations: dict[str, BenchmarkOperation],
 ) -> None:
     if candidate.rule_id != rule.id:
         raise CandidateContextError("candidate rule_id does not match the input rule")

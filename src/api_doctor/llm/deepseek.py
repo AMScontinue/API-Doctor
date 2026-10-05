@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import TypeAdapter, ValidationError
 
+from api_doctor.evaluation.models import BenchmarkOperation
 from api_doctor.generation.semantic_extractor import ExtractionResult, ModelCallTelemetry
 from api_doctor.generation.semantic_prompt import (
     build_prompt_log_view,
@@ -19,7 +20,7 @@ from api_doctor.generation.semantic_prompt import (
     build_semantic_prompt,
 )
 from api_doctor.observability import json_for_log
-from api_doctor.testspec.models import Operation, RuleRecord, SemanticTestCandidate
+from api_doctor.testspec.models import RuleRecord, SemanticTestCandidate
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class DeepSeekExtractor:
         self._url = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
 
     def extract(
-        self, rule: RuleRecord, operations: dict[str, Operation]
+        self, rule: RuleRecord, operations: dict[str, BenchmarkOperation]
     ) -> ExtractionResult:
         completion = self._complete(
             build_semantic_prompt(rule, operations),

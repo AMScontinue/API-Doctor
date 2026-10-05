@@ -9,7 +9,7 @@ from api_doctor.evaluation.runner import _matches_expectation, load_rules, run_s
 from api_doctor.config import load_dotenv
 from api_doctor.generation.semantic_extractor import FixtureExtractor
 from api_doctor.llm.deepseek import DeepSeekExtractor
-from api_doctor.openapi.catalog import load_operations
+from api_doctor.evaluation.catalog import load_operations
 from api_doctor.observability import redact
 from api_doctor.testspec.compiler import CompileError, compile_candidate
 from api_doctor.testspec.models import SemanticTestCandidate
@@ -65,26 +65,26 @@ def _candidate(rule_id: str):
 def test_datetime_relation_compiles_reproducibly():
     candidate, operations = _candidate("order-time-range")
     case = compile_candidate(candidate, operations, case_number=1, seed=7, anchor=ANCHOR)
-    assert case.body["start_time"] == "2026-10-02T10:00:00Z"
-    assert case.body["end_time"] == "2026-10-02T09:00:00Z"
+    assert case.request.body["start_time"] == "2026-10-02T10:00:00Z"
+    assert case.request.body["end_time"] == "2026-10-02T09:00:00Z"
 
 
 def test_numeric_relation_compiles_to_violation():
     candidate, operations = _candidate("discount-not-over-total")
     case = compile_candidate(candidate, operations, case_number=2, seed=7, anchor=ANCHOR)
-    assert case.body["discount_amount"] > case.body["total_amount"]
+    assert case.request.body["discount_amount"] > case.request.body["total_amount"]
 
 
 def test_composed_cash_token_rule_compiles():
     candidate, operations = _candidate("cash-card-token-forbidden")
     case = compile_candidate(candidate, operations, case_number=3, seed=7, anchor=ANCHOR)
-    assert case.body["payment_method"] == "cash"
-    assert case.body["card_token"] == "unexpected-token"
+    assert case.request.body["payment_method"] == "cash"
+    assert case.request.body["card_token"] == "unexpected-token"
 
 
 def test_unknown_field_is_rejected():
     candidate, operations = _candidate("invalid-field-reference")
-    with pytest.raises(CompileError, match="unknown field path"):
+    with pytest.raises(CompileError, match="unknown request body path"):
         compile_candidate(candidate, operations, case_number=9, seed=7, anchor=ANCHOR)
 
 
