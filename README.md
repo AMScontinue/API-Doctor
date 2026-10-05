@@ -79,6 +79,16 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 运行会生成 `run.json`、`report.md` 和 `trajectory.jsonl`。OpenAPI Links 可以把创建接口的响应值传给后续查询或删除接口，并在 run artifact 中保留变量来源。请求受 base URL 同源、重定向、超时、响应大小、方法和 DELETE 显式批准策略约束；响应会校验状态码、Content-Type 和对应 OpenAPI response Schema。
 
+使用 DeepSeek 从接口语义中发现结构化跨接口工作流（只提议，不执行 HTTP）：
+
+```bash
+.venv/bin/api-doctor discover-workflows \
+  --spec examples/buggy-shop/openapi.yaml \
+  --output runs/m2/workflow-discovery.json
+```
+
+该命令从 `.env` 读取 `DEEPSEEK_API_KEY`。发给模型的 Catalog 上下文不包含 OpenAPI Links，因此模型需要根据 operation 描述、请求参数和响应 Schema 提出生产者—消费者关系。输出只是经 Pydantic 结构校验的 `WorkflowCandidate`；语义验证、编译和执行属于后续 M2 阶段。
+
 ## M0 技术验证
 
 安装开发依赖：

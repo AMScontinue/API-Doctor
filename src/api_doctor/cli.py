@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from api_doctor.config import load_dotenv
 from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
 from api_doctor.generation.schema_candidates import generate_schema_candidates
+from api_doctor.generation.workflow_discovery import discover_workflows
+from api_doctor.llm.deepseek import DeepSeekGateway
 from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.reporting.report import save_run_artifacts
@@ -52,6 +56,17 @@ def build_parser() -> argparse.ArgumentParser:
     compile_command = commands.add_parser("compile", help="show compiled HTTP test cases")
     _add_spec(compile_command)
     _add_generation_options(compile_command)
+
+    discover = commands.add_parser(
+        "discover-workflows",
+        help="ask DeepSeek for typed workflow proposals without executing them",
+    )
+    _add_spec(discover)
+    discover.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+    )
 
     run = commands.add_parser("run", help="execute the complete deterministic test pipeline")
     _add_spec(run, output_required=True)
@@ -111,6 +126,25 @@ def _compile(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     _write_json(cases, args.output)
 
 
+def _discover_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    load_dotenv(Path(".env"))
+    logging.basicConfig(level=getattr(logging, args.log_level), format="%(message)s")
+    response = discover_workflows(catalog, DeepSeekGateway())
+    _write_json(
+        {
+            "discovery": response.value.model_dump(mode="json"),
+            "model_usage": {
+                "calls": response.telemetry.calls,
+                "duration_ms": response.telemetry.duration_ms,
+                "prompt_tokens": response.telemetry.prompt_tokens,
+                "completion_tokens": response.telemetry.completion_tokens,
+                "structure_repair_attempts": response.telemetry.structure_repair_attempts,
+            },
+        },
+        args.output,
+    )
+
+
 def main() -> None:
     args = build_parser().parse_args()
     catalog = load_openapi(args.spec)
@@ -123,6 +157,8 @@ def main() -> None:
         _write_json([item.model_dump(mode="json") for item in candidates], args.output)
     elif args.command == "compile":
         _compile(args, catalog)
+    elif args.command == "discover-workflows":
+        _discover_workflows(args, catalog)
     else:
         _run(args, catalog)
 

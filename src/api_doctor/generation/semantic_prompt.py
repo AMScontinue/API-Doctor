@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from api_doctor.evaluation.models import BenchmarkOperation
 from api_doctor.testspec.models import RuleRecord, SemanticTestCandidate
 
@@ -31,49 +29,3 @@ def build_semantic_prompt(
         "operations": [item.model_dump(mode="json") for item in operations.values()],
         "output_json_schema": SemanticTestCandidate.model_json_schema(),
     }
-
-
-def build_repair_prompt(
-    prompt: dict[str, object], invalid_output: str, validation_error: str
-) -> dict[str, object]:
-    return {
-        **prompt,
-        "task": "Repair the previous output so it satisfies the output JSON schema and remains faithful to the rule. If the rule has no expected status codes, it cannot be compilable because a compilable candidate requires an evidence-backed expected result. Output JSON only.",
-        "previous_invalid_output": invalid_output,
-        "validation_error": validation_error,
-    }
-
-
-def build_prompt_log_view(prompt: dict[str, object]) -> dict[str, object]:
-    rule = prompt["rule"]
-    operations = prompt["operations"]
-    view: dict[str, object] = {
-        "task": prompt["task"],
-        "composition_rule": prompt["composition_rule"],
-        "type_rule": prompt["type_rule"],
-        "rule": rule,
-        "operations": [
-            {
-                "operation_id": operation.get("operation_id"),
-                "method": operation.get("method"),
-                "path": operation.get("path"),
-                "request_schema": operation.get("request_schema"),
-            }
-            for operation in operations
-            if isinstance(operation, dict)
-            and (
-                not isinstance(rule, dict)
-                or not rule.get("operation_id")
-                or operation.get("operation_id") == rule.get("operation_id")
-            )
-        ],
-    }
-    if "previous_invalid_output" in prompt:
-        try:
-            view["previous_invalid_output"] = json.loads(
-                str(prompt["previous_invalid_output"])
-            )
-        except json.JSONDecodeError:
-            view["previous_invalid_output"] = "<invalid JSON omitted>"
-        view["validation_error"] = prompt.get("validation_error")
-    return view

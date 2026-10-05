@@ -1310,6 +1310,16 @@ M1 完成后项目是“OpenAPI 确定性测试器 + LLM 语义 TestSpec 生成�
 
 M2 是 Agent 简历价值的关键阶段：至少保存一条真实、非写死的轨迹，证明模型基于 HTTP Observation 形成或更新故障假设，选择受控诊断工具，新观察写回 Working Memory 后触发局部 replan，并由确定性预算和终止条件结束。LLM 调用次数不是目标；`state → decision → tool → observation → state` 的可审计闭环以及相对固定 baseline 的增益才是验收依据。
 
+M2-A LLM Workflow 发现当前实现状态（2026-10-05）：
+
+- 已实现 provider-independent `ModelGateway` 合约和 `DeepSeekGateway`，所有输出均先通过指定 Pydantic 模型校验，结构错误最多修复一次；
+- M0 `DeepSeekExtractor` 已改为复用同一 Gateway，不再维护第二套模型 HTTP、telemetry 和结构修复逻辑；
+- `build_catalog_context` 从 `OperationCatalog` 提取 operation 描述、参数、request/response Schema，明确不向模型提供 OpenAPI Links；
+- 已实现受限 `WorkflowCandidate` DSL：2–4 个 step、响应 JSON Pointer 变量提取、path/query/header/cookie 参数绑定、置信度和歧义列表；结构层会拒绝重复 step/变量和先使用后提取的变量；
+- `api-doctor discover-workflows` 只生成提议并记录模型用量，不发送任何被测 HTTP 请求，不把模型输出直接交给 executor；
+- 一次真实 DeepSeek 验证中，模型在未看到 Links 时提出用户 `create → read → delete` 和订单 `create → read` 工作流，并指出 product_id、时间和 card_token 等无上游生产者的前置数据歧义。本次共 2 次模型调用，其中 1 次为结构修复，总模型耗时 6,902 ms、prompt 6,964 tokens、completion 1,602 tokens；数据仅对当前模型、Prompt、示例规范和本次保存运行有效；
+- 当前仅证明“模型能提出结构化工作流”。operation/字段引用、类型兼容、风险和证据的确定性语义验证属于 M2-B；未完成 M2-B 前不得执行这些 Workflow。
+
 ### M3：可交付性
 
 - pytest renderer 和 JUnit XML；

@@ -8,16 +8,8 @@ from pathlib import Path
 from typing import Protocol
 
 from api_doctor.evaluation.models import BenchmarkOperation
+from api_doctor.llm.gateway import ModelCallTelemetry
 from api_doctor.testspec.models import RuleRecord, SemanticTestCandidate
-
-
-@dataclass(frozen=True)
-class ModelCallTelemetry:
-    calls: int
-    duration_ms: int
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    structure_repair_attempts: int = 0
 
 
 @dataclass(frozen=True)
