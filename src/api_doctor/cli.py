@@ -14,7 +14,7 @@ from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
 from api_doctor.generation.schema_candidates import generate_schema_candidates
 from api_doctor.generation.rules import load_business_rules
-from api_doctor.generation.semantic_discovery import discover_semantic_tests
+from api_doctor.generation.semantic_discovery import SemanticDiscovery, discover_semantic_tests
 from api_doctor.generation.workflow_discovery import discover_workflows
 from api_doctor.llm.deepseek import DeepSeekGateway
 from api_doctor.llm.gateway import ModelGateway, ModelResponse
@@ -22,6 +22,7 @@ from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.reporting.report import save_run_artifacts
 from api_doctor.testspec.openapi_compiler import compile_openapi_candidate
+from api_doctor.testspec.semantic_validation import validate_semantic_candidates
 
 
 DEFAULT_SEED = 20260924
@@ -82,6 +83,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
     )
+
+    validate_tests = commands.add_parser(
+        "validate-tests",
+        help="validate and compile a saved semantic discovery artifact without HTTP",
+    )
+    _add_spec(validate_tests)
+    _add_generation_options(validate_tests)
+    validate_tests.add_argument("--input", type=Path, required=True)
+    validate_tests.add_argument("--rules", type=Path)
 
     run = commands.add_parser("run", help="execute the complete deterministic test pipeline")
     _add_spec(run, output_required=True)
@@ -155,6 +165,25 @@ def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog
     _write_json(_model_response_payload("discovery", response), args.output)
 
 
+def _validate_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    discovery = SemanticDiscovery.model_validate(payload.get("discovery", payload))
+    result = validate_semantic_candidates(
+        discovery.candidates,
+        catalog,
+        load_business_rules(args.rules),
+        seed=args.seed,
+        anchor=datetime.fromisoformat(args.time_anchor),
+    )
+    _write_json(
+        {
+            "summary": result.summary(),
+            "reviews": [review.model_dump(mode="json") for review in result.reviews],
+        },
+        args.output,
+    )
+
+
 def _call_llm_discovery(
     args: argparse.Namespace,
     call: Callable[[ModelGateway], ModelResponse],
@@ -193,6 +222,8 @@ def main() -> None:
         _discover_workflows(args, catalog)
     elif args.command == "discover-tests":
         _discover_semantic_tests(args, catalog)
+    elif args.command == "validate-tests":
+        _validate_semantic_tests(args, catalog)
     else:
         _run(args, catalog)
 

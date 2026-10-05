@@ -98,7 +98,19 @@ Docker Compose 仅作为后续可选的一键复现方式。
   --output runs/m2/semantic-tests.json
 ```
 
-模型可以提出字段关系、条件必填和条件禁止等 `SemanticTestCandidate`，也应将无法用当前 DSL 表达的约束标记为 `not_compilable`。该命令同样只生成提议；候选尚未经证据忠实性、字段引用、类型兼容、去重和冲突校验，不会直接执行。
+模型可以提出字段关系、条件必填和条件禁止等 `SemanticTestCandidate`，也应将无法用当前 DSL 表达的约束标记为 `not_compilable`。该命令只生成提议，不会直接执行。
+
+确定性校验并编译已保存的模型候选（不调用 LLM，也不发送 HTTP）：
+
+```bash
+.venv/bin/api-doctor validate-tests \
+  --spec examples/buggy-shop/openapi.yaml \
+  --rules examples/buggy-shop/rules.yaml \
+  --input runs/m2/semantic-tests.json \
+  --output runs/m2/validated-semantic-tests.json
+```
+
+校验器逐条核对候选引用的规则或 description、operation、状态码、字段、Schema 合法性和字段关系类型，再调用正式编译器生成 `CompiledTestCase`。非法候选会带原因单独拒绝，不影响同批其他候选。去重、冲突处理和与机械候选融合属于下一阶段。
 
 ## M0 技术验证
 

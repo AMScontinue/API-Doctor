@@ -87,7 +87,7 @@ class Expected(StrictModel):
 
 
 class Source(StrictModel):
-    kind: Literal["openapi", "business_rule", "heuristic"]
+    kind: Literal["openapi", "openapi_description", "business_rule", "heuristic"]
     id: str
 
 

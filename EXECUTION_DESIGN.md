@@ -1329,6 +1329,15 @@ M2-B1 LLM 语义测试发现当前实现状态（2026-10-05）：
 - 本次模型耗时 5,587 ms、prompt 4,347 tokens、completion 1,621 tokens，无结构修复；结果同时暴露用户规则与 description 会生成重复候选，且 description 对期望状态的证据强度需要代码复核，证明后续语义校验与候选融合是必要步骤；
 - 当前候选只通过结构校验，不进入 executor。M2-B2 必须复核 source/rule/status、operation/字段引用、relation 类型和 mutation 组合；M2-B3 再与机械候选去重、合并 provenance 并报告冲突。
 
+M2-B2 语义候选校验当前实现状态（2026-10-06）：
+
+- 已将 Schema 证据 `openapi` 与自然语言证据 `openapi_description` 分开：前者的负向 mutation 必须违反 JSON Schema，后者应保持 Schema 合法并只违反文字业务约束；
+- `api-doctor validate-tests` 读取已保存的 LLM discovery，不再次调用模型，也不发送 HTTP；它逐条校验 source 证据、业务规则、operation、期望状态码、顶层字段、Schema 合法性以及数字/日期 relation 类型；
+- 每条候选独立审查，非法候选记录明确原因而不会中断整批；通过者委托正式 `compile_openapi_candidate` 生成具体 `CompiledTestCase`，验证器不维护第二套编译逻辑；
+- 校验层只依赖统一候选模型和 `OperationCatalog`，不依赖 LLM discovery 封装，保持“生成 → 校验/编译”的单向依赖；
+- 一次真实 DeepSeek 产物包含 11 条候选，确定性校验接受 11 条，其中 9 条成功编译，2 条 GET 404 场景作为有依据但当前 DSL 无法表达的 `not_compilable` 保留；本次校验未执行被测 HTTP。该数据只对当前模型、Prompt、示例规范和保存产物有效；
+- 当前产物仍包含用户规则与 OpenAPI description 的语义重复。M2-B3 将进行候选融合、provenance 合并和冲突显式化，不以简单“全部保留”进入执行器。
+
 ### M3：可交付性
 
 - pytest renderer 和 JUnit XML；

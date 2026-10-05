@@ -32,7 +32,7 @@ def build_semantic_test_prompt(
             "Do not repeat constraints that are already directly represented by required, enum, format, minimum, maximum, minLength, maxLength, minItems, or maxItems.",
             "A compilable candidate needs evidence-backed expected status codes.",
             "For a user rule, copy its exact id and expected_status_codes; never invent either.",
-            "For an OpenAPI description, use its exact description_source id and only declared response status codes.",
+            "For an OpenAPI description, use source.kind=openapi_description, copy its exact description_source id, and use only declared response status codes.",
             "If a rule is ambiguous or cannot be represented by the supported mutations, return not_compilable or explain it in ambiguities.",
         ],
         "catalog": build_catalog_context(catalog),
