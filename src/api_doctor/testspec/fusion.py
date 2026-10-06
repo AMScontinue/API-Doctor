@@ -83,8 +83,6 @@ def request_fingerprint(case: CompiledTestCase) -> str:
     payload = {
         "operation_id": case.operation_id,
         "request": case.request.model_dump(mode="json"),
-        "dependencies": sorted(case.dependencies),
-        "risk": case.risk,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

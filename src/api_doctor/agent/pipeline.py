@@ -56,7 +56,7 @@ class AgentPipeline:
     ) -> AgentPipelineResult:
         semantic_response = discover_semantic_tests(catalog, rules, self.gateway)
         plan = self._build_test_plan(catalog, rules, semantic_response.value, config)
-        workflow_response, workflow_validation = self._discover_workflows(catalog)
+        workflow_response, workflow_validation = self._discover_workflows(catalog, rules)
         workflows = workflow_validation.compiled_workflows()
         planning_response, planning = self._create_initial_state(
             catalog, plan, workflows, config, max_steps
@@ -108,8 +108,9 @@ class AgentPipeline:
     def _discover_workflows(
         self,
         catalog: OperationCatalog,
+        rules: list[RuleRecord],
     ) -> tuple[ModelResponse[WorkflowDiscovery], WorkflowValidationResult]:
-        response = discover_workflows(catalog, self.gateway)
+        response = discover_workflows(catalog, self.gateway, rules)
         validated = validate_workflows(response.value.workflows, catalog)
         return response, validated
 

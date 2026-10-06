@@ -117,6 +117,73 @@ def test_rejects_incompatible_extraction_and_parameter_types():
     assert "not type-compatible" in review.errors[0]
 
 
+def test_compiles_response_variable_binding_to_request_body_field():
+    steps = _workflow().model_dump(mode="json")["steps"][:2]
+    steps[0]["extract"].append(
+        {"variable": "user_email", "response_expression": "$response.body#/email"}
+    )
+    steps[1] = {
+        "step_id": "create-again",
+        "operation_id": "createUser",
+        "purpose": "reuse the created email",
+        "bind": [{"location": "body", "name": "email", "variable": "user_email"}],
+    }
+
+    review = _validate([_workflow(steps=steps)]).reviews[0]
+
+    assert review.verdict == "accepted"
+    binding = review.compiled_workflow.steps[1].bind[0]
+    assert binding.location == "body"
+    assert binding.target_schema["format"] == "email"
+
+
+def test_rejects_unknown_request_body_binding():
+    steps = _workflow().model_dump(mode="json")["steps"][:2]
+    steps[1]["operation_id"] = "createUser"
+    steps[1]["bind"][0] = {
+        "location": "body",
+        "name": "missing_field",
+        "variable": "user_id",
+    }
+
+    review = _validate([_workflow(steps=steps)]).reviews[0]
+
+    assert review.verdict == "rejected"
+    assert "unknown request body field" in review.errors[0]
+
+
+def test_compiles_declared_error_expectation_for_intentional_repeat():
+    steps = _workflow().model_dump(mode="json")["steps"][:2]
+    steps[0]["extract"].append(
+        {"variable": "user_email", "response_expression": "$response.body#/email"}
+    )
+    steps[1] = {
+        "step_id": "create-duplicate",
+        "operation_id": "createUser",
+        "purpose": "verify unique email",
+        "expected_status_codes": [409],
+        "repeat": "once",
+        "bind": [{"location": "body", "name": "email", "variable": "user_email"}],
+    }
+
+    review = _validate([_workflow(steps=steps)]).reviews[0]
+
+    assert review.verdict == "accepted"
+    compiled = review.compiled_workflow.steps[1]
+    assert compiled.expected_status_codes == [409]
+    assert compiled.repeat == "once"
+
+
+def test_rejects_undeclared_expected_status():
+    steps = _workflow().model_dump(mode="json")["steps"][:2]
+    steps[1]["expected_status_codes"] = [418]
+
+    review = _validate([_workflow(steps=steps)]).reviews[0]
+
+    assert review.verdict == "rejected"
+    assert "undeclared response status" in review.errors[0]
+
+
 def test_rejects_duplicate_bindings_to_same_parameter():
     steps = _workflow().model_dump(mode="json")["steps"]
     steps[1]["bind"].append(dict(steps[1]["bind"][0]))

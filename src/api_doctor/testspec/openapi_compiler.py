@@ -260,6 +260,7 @@ def compile_openapi_candidate(
     seed: int,
     anchor: datetime,
     parameter_overrides: dict[tuple[str, str], Any] | None = None,
+    body_overrides: dict[str, Any] | None = None,
 ) -> CompiledTestCase:
     """Materialize one candidate and verify its baseline/mutation invariants."""
     if candidate.status != "compilable" or not candidate.operation_id:
@@ -276,6 +277,15 @@ def compile_openapi_candidate(
         anchor=anchor,
         parameter_overrides=parameter_overrides,
     )
+    if body_overrides:
+        schema = _body_schema(operation)
+        if schema is None or not isinstance(request.body, dict):
+            raise OpenAPICompileError(
+                f"operation {operation.operation_id!r} has no object request body"
+            )
+        for name, value in body_overrides.items():
+            _field(f"$.{name}", schema)
+            request.body[name] = deepcopy(value)
     baseline_parameter_errors = _validate_parameters(operation, request)
     if baseline_parameter_errors:
         raise OpenAPICompileError(

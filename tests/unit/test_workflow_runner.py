@@ -69,6 +69,88 @@ def _config(*, approve_delete: bool = True, max_tests: int = 3) -> RunConfig:
     )
 
 
+def _body_binding_workflow():
+    candidate = WorkflowCandidate.model_validate(
+        {
+            "workflow_id": "user_to_order",
+            "purpose": "use the created user id as an order product id",
+            "confidence": "high",
+            "reasoning": "exercise a typed response-to-body binding",
+            "steps": [
+                {
+                    "step_id": "create-user",
+                    "operation_id": "createUser",
+                    "purpose": "create user",
+                    "extract": [
+                        {
+                            "variable": "created_id",
+                            "response_expression": "$response.body#/id",
+                        }
+                    ],
+                },
+                {
+                    "step_id": "create-order",
+                    "operation_id": "createOrder",
+                    "purpose": "inject id into order body",
+                    "bind": [
+                        {
+                            "location": "body",
+                            "name": "product_id",
+                            "variable": "created_id",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    compiled = validate_workflows([candidate], catalog).reviews[0].compiled_workflow
+    assert compiled is not None
+    return catalog, compiled
+
+
+def _duplicate_email_workflow(*, third_attempt: bool = False):
+    duplicate = {
+        "step_id": "create-duplicate",
+        "operation_id": "createUser",
+        "purpose": "verify duplicate email is rejected",
+        "expected_status_codes": [409],
+        "repeat": "once",
+        "bind": [
+            {"location": "body", "name": "email", "variable": "created_email"}
+        ],
+    }
+    steps = [
+        {
+            "step_id": "create-user",
+            "operation_id": "createUser",
+            "purpose": "create user",
+            "extract": [
+                {
+                    "variable": "created_email",
+                    "response_expression": "$response.body#/email",
+                }
+            ],
+        },
+        duplicate,
+    ]
+    if third_attempt:
+        steps.append({**duplicate, "step_id": "create-duplicate-again"})
+    candidate = WorkflowCandidate.model_validate(
+        {
+            "workflow_id": "duplicate_email",
+            "purpose": "verify email uniqueness",
+            "confidence": "high",
+            "reasoning": "the same request must produce a conflict on repetition",
+            "steps": steps,
+        }
+    )
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    compiled = validate_workflows([candidate], catalog).reviews[0].compiled_workflow
+    assert compiled is not None
+    return catalog, compiled
+
+
 def _passed(case, status, body=None):
     return CaseResult(
         case_id=case.case_id,
@@ -116,6 +198,74 @@ def test_executes_steps_injects_variable_and_saves_audit_artifacts(monkeypatch, 
     assert artifacts["json"].exists()
     assert "## Steps" in artifacts["markdown"].read_text()
     assert len(artifacts["trajectory"].read_text().splitlines()) == 3
+
+
+def test_injects_response_variable_into_request_body(monkeypatch):
+    catalog, workflow = _body_binding_workflow()
+    observed_product_ids = []
+
+    def fake_execute(case, policy, operation=None):
+        del policy
+        if operation.operation_id == "createUser":
+            return _passed(
+                case,
+                201,
+                {"id": 42, "name": "Ada", "email": "ada@example.test"},
+            )
+        observed_product_ids.append(case.request.body["product_id"])
+        return _passed(case, 201, {"id": 1, "status": "created"})
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_workflow(workflow, catalog, _config(max_tests=2))
+
+    assert run.metrics.passed == 2
+    assert observed_product_ids == [42]
+    assert run.records[1].compiled_case.dependencies == ["WF-user_to_order-create-user"]
+
+
+def test_allows_one_evidence_backed_repeat_within_workflow(monkeypatch):
+    catalog, workflow = _duplicate_email_workflow()
+    calls = 0
+
+    def fake_execute(case, policy, operation=None):
+        nonlocal calls
+        del policy, operation
+        calls += 1
+        if calls == 1:
+            body = dict(case.request.body)
+            body["id"] = 1
+            return _passed(case, 201, body)
+        return _passed(case, 409, {"error": "email already exists"})
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_workflow(workflow, catalog, _config(max_tests=2))
+
+    assert calls == 2
+    assert run.metrics.passed == 2
+    assert run.records[1].compiled_case.request.body == run.records[0].compiled_case.request.body
+
+
+def test_blocks_second_intentional_repeat_of_same_fingerprint(monkeypatch):
+    catalog, workflow = _duplicate_email_workflow(third_attempt=True)
+    calls = 0
+
+    def fake_execute(case, policy, operation=None):
+        nonlocal calls
+        del policy, operation
+        calls += 1
+        if calls == 1:
+            body = dict(case.request.body)
+            body["id"] = 1
+            return _passed(case, 201, body)
+        return _passed(case, 409, {"error": "email already exists"})
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_workflow(workflow, catalog, _config(max_tests=3))
+
+    assert calls == 2
+    assert run.metrics.passed == 2
+    assert run.metrics.blocked == 1
+    assert run.records[2].reason == "duplicate request fingerprint"
 
 
 def test_delete_is_blocked_without_approval_after_safe_prefix(monkeypatch):

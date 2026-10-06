@@ -1318,7 +1318,7 @@ M2-A LLM Workflow 发现当前实现状态（2026-10-05）：
 - 已实现 provider-independent `ModelGateway` 合约和 `DeepSeekGateway`，所有输出均先通过指定 Pydantic 模型校验，结构错误最多修复一次；
 - M0 `DeepSeekExtractor` 已改为复用同一 Gateway，不再维护第二套模型 HTTP、telemetry 和结构修复逻辑；
 - `build_catalog_context` 从 `OperationCatalog` 提取 operation 描述、参数、request/response Schema，明确不向模型提供 OpenAPI Links；
-- 已实现受限 `WorkflowCandidate` DSL：2–4 个 step、响应 JSON Pointer 变量提取、path/query/header/cookie 参数绑定、置信度和歧义列表；结构层会拒绝重复 step/变量和先使用后提取的变量；
+- 已实现受限 `WorkflowCandidate` DSL：2–4 个 step、响应 JSON Pointer 变量提取、path/query/header/cookie 参数与顶层 request-body 字段绑定、置信度和歧义列表；结构层会拒绝重复 step/变量和先使用后提取的变量；
 - `api-doctor discover-workflows` 只生成提议并记录模型用量，不发送任何被测 HTTP 请求，不把模型输出直接交给 executor；
 - 一次真实 DeepSeek 验证中，模型在未看到 Links 时提出用户 `create → read → delete` 和订单 `create → read` 工作流，并指出 product_id、时间和 card_token 等无上游生产者的前置数据歧义。本次共 2 次模型调用，其中 1 次为结构修复，总模型耗时 6,902 ms、prompt 6,964 tokens、completion 1,602 tokens；数据仅对当前模型、Prompt、示例规范和本次保存运行有效；
 - 该阶段仅证明“模型能提出结构化工作流”；其确定性语义校验与编译已在 M2-C 实现。工作流接入 Agent Runner 前仍不得执行。
@@ -1356,14 +1356,14 @@ M2-C 工作流校验与编译当前实现状态（2026-10-06）：
 - `api-doctor validate-workflows` 读取已保存的 LLM workflow discovery，不再次调用模型，也不发送 HTTP；每条工作流独立校验，错误提议不会阻断同批其他工作流；
 - 校验器确认所有 operation 存在、变量只从声明了对应 JSON Pointer 的 2xx 响应 Schema 提取、绑定目标参数的位置与名称真实存在，并验证所有可能的提取类型均可赋给目标参数；
 - 支持穿过 response Schema 的 `allOf/anyOf/oneOf` 和数组索引查找字段；编译结果按响应状态保存提取 Schema，并保存目标参数 Schema，使运行时可以用真实响应值再次验证，而不是只信任静态类型；
-- 重复 workflow id、同一步骤重复绑定同一参数、不存在的成功响应字段、错误参数位置及类型不兼容均会被拒绝；DELETE 步骤只产生 `requires_approval` 风险标记，不能授予执行权限；
+- 重复 workflow id、同一步骤重复绑定同一目标、不存在的成功响应字段、错误参数/请求体字段及类型不兼容均会被拒绝；DELETE 步骤只产生 `requires_approval` 风险标记，不能授予执行权限；
 - 之前保存的真实 DeepSeek 产物中，用户 `create → read → delete` 和订单 `create → read` 两条工作流均通过确定性校验并编译；其中用户工作流因 DELETE 标记为需要批准。该验证不代表工作流已执行；真实变量提取与注入属于下一阶段 Agent Runner；
 - 当前单元测试使用手工构造的正确及对抗性提议，不依赖 prompt 示例，覆盖合法生命周期、批内错误隔离、未知 operation、只存在于错误响应的字段、错误参数位置、类型不兼容、重复绑定和重复 workflow id。
 
 M2-D 工作流运行时当前实现状态（2026-10-06）：
 
 - `api-doctor run-workflow` 会针对当前 OpenAPI 重新校验保存的 workflow discovery，只允许选择通过校验的工作流；该命令自身不调用 LLM，但直接消费 LLM 发现产物；
-- 每个 step 由正式 OpenAPI 编译器生成合法 baseline 请求，workflow binding 作为受控 parameter override 注入；请求仍通过同源 URL、重定向、超时、响应大小、method 和 DELETE 审批策略约束的同一 HTTP 工具执行；
+- 每个 step 由正式 OpenAPI 编译器生成合法 baseline 请求，workflow binding 作为受控 parameter 或顶层 body override 注入；请求仍通过同源 URL、重定向、超时、响应大小、method 和 DELETE 审批策略约束的同一 HTTP 工具执行；
 - 只有通过状态码和完整 response Schema 校验的步骤才能提取变量；具体值先按对应响应状态的提取 Schema 校验，写入单次运行 Working Memory，注入下游前再按目标参数 Schema 校验；同一步的多个变量采用原子写入，任一提取失败不会留下部分状态；
 - 步骤失败、编译错误、变量错误、预算耗尽或安全阻断会停止工作流后缀；未执行步骤保留明确 blocked 原因。DELETE 即使由 LLM 提议也必须由用户显式传入 `--approve-delete`；
 - 运行产物包含脱敏 `run.json`、Markdown 报告和逐步 `trajectory.jsonl`，记录具体请求、Observation、变量来源和依赖 case id；
@@ -1395,6 +1395,8 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 - 测试计划构建集中在独立的确定性 `build_final_test_plan` 服务中，CLI 不再复制机械候选编译、语义候选校验和融合逻辑。阶段子命令继续保留为开发、检查和复现实验的接口。
 - Pipeline 与文件持久化解耦，只接收可选 checkpoint 回调并返回完整类型化结果。CLI 负责将脱敏的语义发现、最终测试计划、workflow 发现与校验、初始规划及分阶段模型用量保存到 `pipeline.json`；已包含文件的运行目录会被拒绝，不能静默覆盖历史轨迹。
 - 未获得 DELETE 批准时，`requires_approval` 的单测试和 workflow 都不能进入 LLM Planner inventory、可信 inventory 或确定性 fallback；运行时安全策略继续作为最后一道独立防线。
+- Workflow step 现可选声明 `expected_status_codes`，校验器只接受当前 operation 在 OpenAPI 中精确声明的状态；需要从响应提取变量的 step 仍必须使用具有对应响应 Schema 的成功状态。
+- `repeat=once` 只能用于当前 workflow 内已发送过的相同请求指纹，每个指纹最多追加一次；外部 action 指纹、第三次相同请求和未显式标记的重复仍由确定性运行时阻止。
 
 ### M3：可交付性
 

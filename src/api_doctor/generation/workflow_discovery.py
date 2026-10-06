@@ -7,6 +7,7 @@ from typing import Any
 from api_doctor.generation.workflow_models import WorkflowDiscovery
 from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.openapi.models import OperationCatalog
+from api_doctor.testspec.models import RuleRecord
 
 
 def build_catalog_context(catalog: OperationCatalog) -> dict[str, object]:
@@ -57,17 +58,23 @@ def build_catalog_context(catalog: OperationCatalog) -> dict[str, object]:
     }
 
 
-def build_workflow_prompt(catalog: OperationCatalog) -> dict[str, object]:
+def build_workflow_prompt(
+    catalog: OperationCatalog,
+    rules: list[RuleRecord] | None = None,
+) -> dict[str, object]:
     return {
         "task": "Propose useful two-to-four-step API workflows by inferring producer-consumer relationships from operation semantics and schemas. Output proposals only; do not generate code or URLs.",
         "constraints": [
             "Use only operation_id values present in the catalog.",
             "Extract variables only from declared response body fields.",
-            "Bind variables only to declared operation parameters.",
+            "Bind variables only to declared operation parameters or to one declared top-level request-body field with location=body.",
             "A variable must be extracted by an earlier step before it is bound.",
             "Prefer lifecycle workflows such as create-then-read over unrelated operations.",
+            "Set expected_status_codes only to exact responses declared by that operation.",
+            "Use repeat=once only for an evidence-backed repeated-request scenario; it permits one repeated fingerprint within the same workflow.",
             "Report uncertainty in ambiguities instead of inventing missing API behavior.",
         ],
+        "business_rules": [rule.model_dump(mode="json") for rule in (rules or [])],
         "runtime_expression": "Use $response.body#/field JSON Pointer expressions.",
         "catalog": build_catalog_context(catalog),
         "output_json_schema": WorkflowDiscovery.model_json_schema(),
@@ -77,10 +84,11 @@ def build_workflow_prompt(catalog: OperationCatalog) -> dict[str, object]:
 def discover_workflows(
     catalog: OperationCatalog,
     gateway: ModelGateway,
+    rules: list[RuleRecord] | None = None,
 ) -> ModelResponse[WorkflowDiscovery]:
     """Return typed proposals only; semantic validation and execution belong to later stages."""
     return gateway.complete(
-        build_workflow_prompt(catalog),
+        build_workflow_prompt(catalog, rules),
         response_model=WorkflowDiscovery,
         trace_label="workflow-discovery",
     )

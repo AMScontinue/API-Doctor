@@ -98,7 +98,9 @@ Docker Compose 仅作为后续可选的一键复现方式。
   --output runs/m2/validated-workflows.json
 ```
 
-校验器确认 operation、成功响应 JSON Pointer、下游参数位置和变量类型均来自当前 `OperationCatalog`，拒绝重复绑定及重复 workflow id。编译结果保存每个可提取响应状态及目标参数 Schema，供运行时再次校验真实值；包含 DELETE 的工作流只标记为需要批准，不会获得隐式执行权限。
+校验器确认 operation、成功响应 JSON Pointer、下游参数或顶层 request-body 字段以及变量类型均来自当前 `OperationCatalog`，拒绝重复绑定及重复 workflow id。编译结果保存每个可提取响应状态及目标 Schema，供运行时再次校验真实值；包含 DELETE 的工作流只标记为需要批准，不会获得隐式执行权限。
+
+Workflow step 可选声明 `expected_status_codes`，但只能使用该 operation 在 OpenAPI 中精确声明的状态码。`repeat=once` 仅允许重复本 workflow 内已实际发送的同一请求指纹一次，不能重复外部 action 或无限关闭去重。
 
 在本地服务上执行一条已经发现的工作流：
 

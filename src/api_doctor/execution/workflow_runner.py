@@ -57,6 +57,8 @@ class _WorkflowRunner:
         self.records: list[WorkflowStepRecord] = []
         self.halt_reason: str | None = None
         self.seen_fingerprints = set(seen_fingerprints or ())
+        self.workflow_fingerprints: set[str] = set()
+        self.repeated_fingerprints: set[str] = set()
 
     def run(self) -> WorkflowRun:
         started = datetime.now(timezone.utc)
@@ -91,7 +93,9 @@ class _WorkflowRunner:
     def _run_step(self, index: int) -> WorkflowStepRecord:
         step = self.workflow.steps[index - 1]
         try:
-            overrides, dependencies = self._binding_values(step.bind)
+            parameter_overrides, body_overrides, dependencies = self._binding_values(
+                step.bind
+            )
             candidate = SemanticTestCandidate(
                 rule_id=f"workflow:{self.workflow.workflow_id}:{step.step_id}",
                 status="compilable",
@@ -110,7 +114,8 @@ class _WorkflowRunner:
                 case_number=index,
                 seed=self.config.seed,
                 anchor=self.config.time_anchor,
-                parameter_overrides=overrides,
+                parameter_overrides=parameter_overrides,
+                body_overrides=body_overrides,
             )
             case.case_id = f"WF-{self.workflow.workflow_id}-{step.step_id}"
             case.dependencies = sorted(dependencies)
@@ -120,24 +125,32 @@ class _WorkflowRunner:
 
         fingerprint = request_fingerprint(case)
         if fingerprint in self.seen_fingerprints:
-            self.halt_reason = f"workflow halted before duplicate request {fingerprint}"
-            return WorkflowStepRecord(
-                step=step,
-                state="blocked",
-                compiled_case=case,
-                result=TestResult(
-                    case_id=case.case_id,
-                    outcome="blocked",
-                    actual_status=None,
-                    expected_statuses=case.assertions[0].allowed,
-                    error="duplicate request fingerprint",
-                ),
-                reason="duplicate request fingerprint",
+            repeat_allowed = (
+                step.repeat == "once"
+                and fingerprint in self.workflow_fingerprints
+                and fingerprint not in self.repeated_fingerprints
             )
+            if not repeat_allowed:
+                self.halt_reason = f"workflow halted before duplicate request {fingerprint}"
+                return WorkflowStepRecord(
+                    step=step,
+                    state="blocked",
+                    compiled_case=case,
+                    result=TestResult(
+                        case_id=case.case_id,
+                        outcome="blocked",
+                        actual_status=None,
+                        expected_statuses=case.assertions[0].allowed,
+                        error="duplicate request fingerprint",
+                    ),
+                    reason="duplicate request fingerprint",
+                )
+            self.repeated_fingerprints.add(fingerprint)
 
         result = execute_case(case, self.policy, operation=self.catalog.get(step.operation_id))
         if result.request_url is not None:
             self.seen_fingerprints.add(fingerprint)
+            self.workflow_fingerprints.add(fingerprint)
         if result.outcome != "passed":
             self.halt_reason = (
                 f"workflow halted after step {step.step_id!r} returned {result.outcome}"
@@ -174,8 +187,9 @@ class _WorkflowRunner:
     def _binding_values(
         self,
         bindings: list[CompiledBinding],
-    ) -> tuple[dict[tuple[str, str], object], set[str]]:
-        overrides: dict[tuple[str, str], object] = {}
+    ) -> tuple[dict[tuple[str, str], object], dict[str, object], set[str]]:
+        parameter_overrides: dict[tuple[str, str], object] = {}
+        body_overrides: dict[str, object] = {}
         dependencies: set[str] = set()
         for binding in bindings:
             variable = self.variables.get(binding.variable)
@@ -187,9 +201,12 @@ class _WorkflowRunner:
                     f"variable {binding.variable!r} violates target parameter schema: "
                     f"{errors[0].message}"
                 )
-            overrides[(binding.location, binding.name)] = variable.value
+            if binding.location == "body":
+                body_overrides[binding.name] = variable.value
+            else:
+                parameter_overrides[(binding.location, binding.name)] = variable.value
             dependencies.add(variable.producer_case_id)
-        return overrides, dependencies
+        return parameter_overrides, body_overrides, dependencies
 
     def _capture(
         self,

@@ -24,7 +24,7 @@ class CompiledExtraction(StrictModel):
 
 
 class CompiledBinding(StrictModel):
-    location: Literal["path", "query", "header", "cookie"]
+    location: Literal["path", "query", "header", "cookie", "body"]
     name: str
     variable: str
     target_schema: dict[str, Any]
@@ -36,6 +36,7 @@ class CompiledWorkflowStep(StrictModel):
     method: str
     purpose: str
     expected_status_codes: list[int]
+    repeat: Literal["forbid", "once"] = "forbid"
     extract: list[CompiledExtraction] = Field(default_factory=list)
     bind: list[CompiledBinding] = Field(default_factory=list)
     requires_approval: bool = False
@@ -213,6 +214,14 @@ def _success_status_codes(operation: Operation) -> set[int]:
     }
 
 
+def _declared_status_codes(operation: Operation) -> set[int]:
+    return {
+        int(response.status_code)
+        for response in operation.responses
+        if response.status_code.isdigit()
+    }
+
+
 def _parameter(operation: Operation, location: str, name: str) -> Parameter | None:
     return next(
         (
@@ -222,6 +231,19 @@ def _parameter(operation: Operation, location: str, name: str) -> Parameter | No
         ),
         None,
     )
+
+
+def _binding_target(
+    operation: Operation,
+    location: str,
+    name: str,
+) -> dict[str, Any] | None:
+    if location == "body":
+        if operation.request_body is None:
+            return None
+        return _schema_child(operation.request_body.json_schema, name)
+    parameter = _parameter(operation, location, name)
+    return parameter.json_schema if parameter is not None else None
 
 
 def _compile_workflow(
@@ -260,9 +282,25 @@ def _compile_workflow(
             {schema.status_code for schema in extraction.schemas}
             for extraction in extractions
         ]
-        expected_statuses = (
+        extraction_statuses = (
             set.intersection(*status_sets) if status_sets else _success_status_codes(operation)
         )
+        expected_statuses = (
+            set(step.expected_status_codes)
+            if step.expected_status_codes is not None
+            else extraction_statuses
+        )
+        undeclared = expected_statuses - _declared_status_codes(operation)
+        if undeclared:
+            errors.append(
+                f"step {step.step_id!r} expects undeclared response status(es) "
+                f"{sorted(undeclared)}"
+            )
+        if extractions and not expected_statuses.issubset(extraction_statuses):
+            errors.append(
+                f"step {step.step_id!r} cannot extract variables from expected "
+                f"status(es) {sorted(expected_statuses - extraction_statuses)}"
+            )
         if not expected_statuses:
             errors.append(
                 f"step {step.step_id!r} has no exact declared 2xx response that satisfies "
@@ -277,12 +315,13 @@ def _compile_workflow(
                 errors.append(f"step {step.step_id!r} binds {target!r} more than once")
                 continue
             bound_targets.add(target)
-            parameter = _parameter(operation, *target)
-            if parameter is None:
-                errors.append(
-                    f"step {step.step_id!r} references unknown {binding.location} "
-                    f"parameter {binding.name!r}"
-                )
+            target_schema = _binding_target(operation, *target)
+            if target_schema is None:
+                if binding.location == "body":
+                    description = f"request body field {binding.name!r}"
+                else:
+                    description = f"{binding.location} parameter {binding.name!r}"
+                errors.append(f"step {step.step_id!r} references unknown {description}")
                 continue
             source_schemas = variables.get(binding.variable, [])
             if not source_schemas:
@@ -291,7 +330,7 @@ def _compile_workflow(
                 )
                 continue
             if not all(
-                _types_compatible(source.json_schema, parameter.json_schema)
+                _types_compatible(source.json_schema, target_schema)
                 for source in source_schemas
             ):
                 errors.append(
@@ -304,7 +343,7 @@ def _compile_workflow(
                     location=binding.location,
                     name=binding.name,
                     variable=binding.variable,
-                    target_schema=parameter.json_schema,
+                    target_schema=target_schema,
                 )
             )
 
@@ -315,6 +354,7 @@ def _compile_workflow(
                 method=operation.method,
                 purpose=step.purpose,
                 expected_status_codes=sorted(expected_statuses),
+                repeat=step.repeat,
                 extract=extractions,
                 bind=bindings,
                 requires_approval=operation.method == "DELETE",

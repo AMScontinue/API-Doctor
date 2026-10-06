@@ -60,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="ask DeepSeek for typed workflow proposals without executing them",
     )
     _add_spec(discover)
+    discover.add_argument("--rules", type=Path)
     discover.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -160,13 +161,19 @@ def _compile(args: argparse.Namespace, catalog: OperationCatalog) -> None:
 
 
 def _discover_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    response = _call_llm_discovery(args, lambda gateway: discover_workflows(catalog, gateway))
+    response = _call_llm_discovery(
+        args,
+        lambda gateway: discover_workflows(
+            catalog,
+            gateway,
+            load_business_rules(args.rules),
+        ),
+    )
     _write_json(_model_response_payload("discovery", response), args.output)
 
 
 def _validate_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    payload = json.loads(args.input.read_text(encoding="utf-8"))
-    discovery = WorkflowDiscovery.model_validate(payload.get("discovery", payload))
+    discovery = _load_workflow_discovery(args.input)
     result = validate_workflows(discovery.workflows, catalog)
     _write_json(
         {
@@ -179,8 +186,7 @@ def _validate_workflows(args: argparse.Namespace, catalog: OperationCatalog) -> 
 
 
 def _run_workflow(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    payload = json.loads(args.input.read_text(encoding="utf-8"))
-    discovery = WorkflowDiscovery.model_validate(payload.get("discovery", payload))
+    discovery = _load_workflow_discovery(args.input)
     validation = validate_workflows(discovery.workflows, catalog)
     review = next(
         (
@@ -211,6 +217,12 @@ def _run_workflow(args: argparse.Namespace, catalog: OperationCatalog) -> None:
         },
         output=None,
     )
+
+
+def _load_workflow_discovery(path: Path) -> WorkflowDiscovery:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    discovery = payload.get("workflow_discovery", payload.get("discovery", payload))
+    return WorkflowDiscovery.model_validate(discovery)
 
 
 def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:

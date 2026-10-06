@@ -183,7 +183,12 @@ def test_metadata_changes_do_not_prevent_deduplication_but_request_changes_do():
     )
     relabeled = original.model_copy(
         deep=True,
-        update={"case_id": "untrusted-label", "rule_id": "relabeled", "purpose": "other prose"},
+        update={
+            "case_id": "untrusted-label",
+            "rule_id": "relabeled",
+            "purpose": "other prose",
+            "dependencies": ["producer-case"],
+        },
     )
     changed_request = original.model_copy(deep=True, update={"rule_id": "changed-request"})
     changed_request.request.query_parameters["dry_run"] = True

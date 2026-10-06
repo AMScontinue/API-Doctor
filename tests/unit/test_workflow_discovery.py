@@ -8,6 +8,7 @@ from api_doctor.generation.workflow_discovery import (
     build_catalog_context,
     discover_workflows,
 )
+from api_doctor.generation.rules import load_business_rules
 from api_doctor.generation.workflow_models import WorkflowDiscovery
 from api_doctor.llm.gateway import ModelCallTelemetry, ModelResponse
 from api_doctor.openapi import load_openapi
@@ -84,12 +85,17 @@ def test_catalog_context_excludes_openapi_links():
 
 def test_discovery_returns_typed_non_executable_proposals():
     catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    rules = load_business_rules(ROOT / "examples/buggy-shop/rules.yaml")
     gateway = FakeGateway(_discovery())
 
-    response = discover_workflows(catalog, gateway)
+    response = discover_workflows(catalog, gateway, rules)
 
     assert response.value.workflows[0].steps[1].bind[0].variable == "user_id"
     assert gateway.prompt["catalog"] == build_catalog_context(catalog)
+    assert {item["id"] for item in gateway.prompt["business_rules"]} >= {
+        "unique-user-email",
+        "repeated-order-status-conflict",
+    }
 
 
 def test_workflow_rejects_variable_use_before_extraction():
