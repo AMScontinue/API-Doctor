@@ -1378,6 +1378,17 @@ M2-E AgentState 与初始 Planner 当前实现状态（2026-10-06）：
 - 开发验证中的另一次真实调用里，模型文字声称成本为 8、结构化选择实际成本为 9，确定性校验成功拒绝并触发 fallback；该次临时产物后来被最终验证覆盖，因此只作为开发观察，不作为保存运行指标；
 - 下一阶段把 pending actions 接入统一执行循环，每个真实 HTTP Observation 更新状态并消耗预算；之后才加入失败触发的 Analyzer 与局部 replan。
 
+M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
+
+- `api-doctor run-agent-actions` 读取已校验 `AgentState`、`FinalTestPlan` 与 `CompiledWorkflow` registry，不新增 LLM 调用；运行前复核 OpenAPI fingerprint、action id、真实 workflow 成本、请求预算和 Agent step 预算，不能依赖 state 中可被篡改的估算；
+- 同一状态循环可以执行单接口 `CompiledTestCase` 和跨接口 `CompiledWorkflow`。每个真实 HTTP 请求消耗 request budget 与 Agent step budget；安全预检阻断和重复指纹不消耗 HTTP 预算，但仍作为一次 Agent 状态转换记录；
+- action 完成后从 pending 移入 completed，并写入结构化 `AgentObservation`、实际请求数、step 数、violations、请求指纹和 workflow 变量血缘；单接口与 workflow 最终都经过既有 HTTP safety 和 response validation；
+- failed/error Observation 会把 phase 切换为 `analyzing` 并暂停剩余队列，作为下一阶段 Analyzer/Replanner 的真实输入；passed/blocked 在预算允许时继续，队列为空或硬预算不足由代码确定性结束；
+- 每个 action 后通过回调原子覆盖 `checkpoint.json` 并追加脱敏 `trajectory.jsonl`；最终 `run.json` 保留具体请求/响应执行记录，Markdown 报告使用事实模板生成；
+- 单元测试覆盖混合队列、workflow 变量合并、预算扣减、失败暂停、重复指纹、篡改成本、预算不足、checkpoint 和 artifact；不调用 LLM，也不伪造 planner 成功率；
+- 一次真实本地运行消费保存的 DeepSeek 初始计划：执行 1 个两步 `order_create_read` workflow 与 6 个单接口用例，共 7 个 action、8 个 HTTP 请求，8/8 passed，记录 8 个请求指纹和 `order_id=1` 血缘；request budget 从 8 降至 0，Agent step budget 在扣除首次规划与 8 次工具步骤后剩余 1，最终因 pending queue 为空结束；
+- 当前已经接通“LLM initial plan → validated AgentState → 真实混合工具执行 → Observation/Working Memory/checkpoint”。尚缺失败 Observation 的 LLM Analyzer、诊断 action 校验和 `plan_version` 驱动的局部 replan。
+
 ### M3：可交付性
 
 - pytest renderer 和 JUnit XML；

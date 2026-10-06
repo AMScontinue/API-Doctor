@@ -24,6 +24,7 @@ from api_doctor.testspec.models import (
     TestResult,
     UseBaseline,
 )
+from api_doctor.testspec.fusion import request_fingerprint
 from api_doctor.testspec.openapi_compiler import OpenAPICompileError, compile_openapi_candidate
 from api_doctor.workflows.validation import (
     CompiledBinding,
@@ -42,6 +43,7 @@ class _WorkflowRunner:
         workflow: CompiledWorkflow,
         catalog: OperationCatalog,
         config: RunConfig,
+        seen_fingerprints: set[str] | None = None,
     ) -> None:
         self.workflow = workflow
         self.catalog = catalog
@@ -54,6 +56,7 @@ class _WorkflowRunner:
         self.variables: dict[str, WorkflowVariable] = {}
         self.records: list[WorkflowStepRecord] = []
         self.halt_reason: str | None = None
+        self.seen_fingerprints = set(seen_fingerprints or ())
 
     def run(self) -> WorkflowRun:
         started = datetime.now(timezone.utc)
@@ -115,7 +118,26 @@ class _WorkflowRunner:
             self.halt_reason = f"workflow halted after compile failure: {error}"
             return WorkflowStepRecord(step=step, state="compile_error", reason=str(error))
 
+        fingerprint = request_fingerprint(case)
+        if fingerprint in self.seen_fingerprints:
+            self.halt_reason = f"workflow halted before duplicate request {fingerprint}"
+            return WorkflowStepRecord(
+                step=step,
+                state="blocked",
+                compiled_case=case,
+                result=TestResult(
+                    case_id=case.case_id,
+                    outcome="blocked",
+                    actual_status=None,
+                    expected_statuses=case.assertions[0].allowed,
+                    error="duplicate request fingerprint",
+                ),
+                reason="duplicate request fingerprint",
+            )
+
         result = execute_case(case, self.policy, operation=self.catalog.get(step.operation_id))
+        if result.request_url is not None:
+            self.seen_fingerprints.add(fingerprint)
         if result.outcome != "passed":
             self.halt_reason = (
                 f"workflow halted after step {step.step_id!r} returned {result.outcome}"
@@ -236,5 +258,12 @@ def run_workflow(
     workflow: CompiledWorkflow,
     catalog: OperationCatalog,
     config: RunConfig,
+    *,
+    seen_fingerprints: set[str] | None = None,
 ) -> WorkflowRun:
-    return _WorkflowRunner(workflow, catalog, config).run()
+    return _WorkflowRunner(
+        workflow,
+        catalog,
+        config,
+        seen_fingerprints=seen_fingerprints,
+    ).run()

@@ -127,6 +127,20 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 模型只能引用输入 inventory 中的 `item_id` 并声明优先级、理由和请求成本。代码重新计算真实成本，检查 ID、请求预算和 Agent step 预算；模型伪造 ID、谎报成本或超预算时使用确定性 fallback。没有 `--approve-delete` 时，包含 DELETE 的工作流不会进入 Planner inventory 或 fallback。输出是显式 `AgentState`，此命令当前尚不执行 pending actions。
 
+执行已经校验的 Agent pending queue（不产生新的 LLM 调用）：
+
+```bash
+.venv/bin/api-doctor run-agent-actions \
+  --spec examples/buggy-shop/openapi.yaml \
+  --state runs/m2/initial-agent-plan.json \
+  --test-plan runs/m2/final-test-plan.json \
+  --workflows runs/m2/validated-workflows.json \
+  --base-url http://127.0.0.1:18080 \
+  --output runs/m2/agent-action-run
+```
+
+统一执行器从可信 registry 解析每个 action，重新核对真实成本和 OpenAPI 指纹，执行单接口 `CompiledTestCase` 或跨接口 `CompiledWorkflow`，再把 Observation、变量、请求指纹和预算写回 AgentState。失败或错误会把 phase 切到 `analyzing` 并保留剩余队列；安全阻断和重复请求不会消耗 HTTP 预算。每个 action 后原子更新 `checkpoint.json` 并追加脱敏 trajectory。
+
 从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
 
 ```bash

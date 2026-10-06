@@ -7,7 +7,8 @@ from uuid import uuid4
 
 from pydantic import Field, model_validator
 
-from api_doctor.testspec.models import StrictModel
+from api_doctor.execution.models import WorkflowRun
+from api_doctor.testspec.models import CompiledTestCase, StrictModel, TestResult
 
 
 class PlannedAction(StrictModel):
@@ -36,6 +37,18 @@ class AgentObservation(StrictModel):
     outcome: Literal["passed", "failed", "error", "blocked"]
     evidence_ref: str
     summary: str
+    request_count: int = Field(default=0, ge=0)
+    agent_steps: int = Field(default=1, ge=1)
+    violations: list[str] = Field(default_factory=list)
+
+
+class AgentVariable(StrictModel):
+    action_id: str
+    name: str
+    value: object
+    producer_operation_id: str
+    producer_case_id: str
+    response_expression: str
 
 
 class AgentHypothesis(StrictModel):
@@ -54,6 +67,7 @@ class AgentState(StrictModel):
     pending_actions: list[PlannedAction]
     completed_actions: list[PlannedAction] = Field(default_factory=list)
     observations: list[AgentObservation] = Field(default_factory=list)
+    variables: list[AgentVariable] = Field(default_factory=list)
     hypotheses: list[AgentHypothesis] = Field(default_factory=list)
     remaining_test_budget: int = Field(ge=0)
     remaining_step_budget: int = Field(ge=0)
@@ -67,3 +81,17 @@ class InitialPlanningResult(StrictModel):
     state: AgentState
     used_fallback: bool = False
     validation_errors: list[str] = Field(default_factory=list)
+
+
+class AgentActionRecord(StrictModel):
+    action: PlannedAction
+    observation: AgentObservation
+    request_fingerprints: list[str] = Field(default_factory=list)
+    test_case: CompiledTestCase | None = None
+    test_result: TestResult | None = None
+    workflow_run: WorkflowRun | None = None
+
+
+class AgentRun(StrictModel):
+    state: AgentState
+    records: list[AgentActionRecord] = Field(default_factory=list)

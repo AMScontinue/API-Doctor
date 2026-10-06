@@ -9,7 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from api_doctor.agent.models import AgentState
+from api_doctor.agent.persistence import AgentArtifactStore
 from api_doctor.agent.planning import initialize_agent_state, propose_initial_plan
+from api_doctor.agent.runtime import run_agent_actions
 from api_doctor.config import load_dotenv
 from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
@@ -115,6 +118,19 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
     )
+
+    run_agent = commands.add_parser(
+        "run-agent-actions",
+        help="execute a validated AgentState queue without additional LLM calls",
+    )
+    _add_spec(run_agent, output_required=True)
+    _add_generation_options(run_agent)
+    run_agent.add_argument("--state", type=Path, required=True)
+    run_agent.add_argument("--test-plan", type=Path, required=True)
+    run_agent.add_argument("--workflows", type=Path, required=True)
+    run_agent.add_argument("--base-url", required=True)
+    run_agent.add_argument("--timeout", type=float, default=5.0)
+    run_agent.add_argument("--approve-delete", action="store_true")
 
     discover_tests = commands.add_parser(
         "discover-tests",
@@ -306,6 +322,53 @@ def _plan_agent(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     )
 
 
+def _run_agent_actions(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    state_payload = json.loads(args.state.read_text(encoding="utf-8"))
+    state = AgentState.model_validate(
+        state_payload.get("planning", state_payload).get("state", state_payload)
+    )
+    plan_payload = json.loads(args.test_plan.read_text(encoding="utf-8"))
+    plan = FinalTestPlan.model_validate(plan_payload.get("plan", plan_payload))
+    workflow_payload = json.loads(args.workflows.read_text(encoding="utf-8"))
+    validation = WorkflowValidationResult.model_validate(
+        {"reviews": workflow_payload.get("reviews", [])}
+    )
+    workflows = [
+        review.compiled_workflow
+        for review in validation.reviews
+        if review.compiled_workflow is not None
+    ]
+    store = AgentArtifactStore(args.output)
+    run = run_agent_actions(
+        state,
+        plan,
+        workflows,
+        catalog,
+        RunConfig(
+            base_url=args.base_url,
+            seed=args.seed,
+            time_anchor=datetime.fromisoformat(args.time_anchor),
+            max_tests=max(state.remaining_test_budget, 1),
+            approve_delete=args.approve_delete,
+            timeout_seconds=args.timeout,
+        ),
+        checkpoint=store.checkpoint,
+    )
+    artifacts = store.finalize(run)
+    _write_json(
+        {
+            "run_id": run.state.run_id,
+            "phase": run.state.phase,
+            "observations": len(run.state.observations),
+            "remaining_test_budget": run.state.remaining_test_budget,
+            "remaining_step_budget": run.state.remaining_step_budget,
+            "termination_reason": run.state.termination_reason,
+            "artifacts": {name: str(path) for name, path in artifacts.items()},
+        },
+        output=None,
+    )
+
+
 def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     rules = load_business_rules(args.rules)
     response = _call_llm_discovery(
@@ -443,6 +506,8 @@ def main() -> None:
         _run_workflow(args, catalog)
     elif args.command == "plan-agent":
         _plan_agent(args, catalog)
+    elif args.command == "run-agent-actions":
+        _run_agent_actions(args, catalog)
     elif args.command == "discover-tests":
         _discover_semantic_tests(args, catalog)
     elif args.command == "validate-tests":
