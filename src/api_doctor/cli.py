@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from api_doctor.agent.planning import initialize_agent_state, propose_initial_plan
 from api_doctor.config import load_dotenv
 from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
@@ -23,13 +24,13 @@ from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.reporting.report import save_run_artifacts, save_workflow_run_artifacts
-from api_doctor.testspec.fusion import CandidateIssue, fuse_test_cases
+from api_doctor.testspec.fusion import CandidateIssue, FinalTestPlan, fuse_test_cases
 from api_doctor.testspec.openapi_compiler import OpenAPICompileError, compile_openapi_candidate
 from api_doctor.testspec.semantic_validation import (
     SemanticValidationResult,
     validate_semantic_candidates,
 )
-from api_doctor.workflows.validation import validate_workflows
+from api_doctor.workflows.validation import WorkflowValidationResult, validate_workflows
 
 
 DEFAULT_SEED = 20260924
@@ -98,6 +99,22 @@ def build_parser() -> argparse.ArgumentParser:
     run_workflow_command.add_argument("--max-tests", type=int, default=4)
     run_workflow_command.add_argument("--timeout", type=float, default=5.0)
     run_workflow_command.add_argument("--approve-delete", action="store_true")
+
+    plan_agent = commands.add_parser(
+        "plan-agent",
+        help="ask DeepSeek to prioritize validated tests and workflows without HTTP",
+    )
+    _add_spec(plan_agent, output_required=True)
+    plan_agent.add_argument("--test-plan", type=Path, required=True)
+    plan_agent.add_argument("--workflows", type=Path, required=True)
+    plan_agent.add_argument("--max-tests", type=int, default=10)
+    plan_agent.add_argument("--max-steps", type=int, default=20)
+    plan_agent.add_argument("--approve-delete", action="store_true")
+    plan_agent.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
+        default="INFO",
+    )
 
     discover_tests = commands.add_parser(
         "discover-tests",
@@ -248,6 +265,47 @@ def _run_workflow(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     )
 
 
+def _plan_agent(args: argparse.Namespace, catalog: OperationCatalog) -> None:
+    plan_payload = json.loads(args.test_plan.read_text(encoding="utf-8"))
+    plan = FinalTestPlan.model_validate(plan_payload.get("plan", plan_payload))
+    workflow_payload = json.loads(args.workflows.read_text(encoding="utf-8"))
+    validation = WorkflowValidationResult.model_validate(
+        {"reviews": workflow_payload.get("reviews", [])}
+    )
+    workflows = [
+        review.compiled_workflow
+        for review in validation.reviews
+        if review.compiled_workflow is not None
+    ]
+    response = _call_llm_discovery(
+        args,
+        lambda gateway: propose_initial_plan(
+            plan,
+            workflows,
+            max_tests=args.max_tests,
+            max_steps=args.max_steps,
+            delete_approved=args.approve_delete,
+            gateway=gateway,
+        ),
+    )
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=plan,
+        workflows=workflows,
+        proposed_plan=response.value,
+        max_tests=args.max_tests,
+        max_steps=args.max_steps,
+        delete_approved=args.approve_delete,
+    )
+    _write_json(
+        {
+            "planning": result.model_dump(mode="json"),
+            "model_usage": _model_usage(response),
+        },
+        args.output,
+    )
+
+
 def _discover_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     rules = load_business_rules(args.rules)
     response = _call_llm_discovery(
@@ -351,13 +409,17 @@ def _call_llm_discovery(
 def _model_response_payload(name: str, response: ModelResponse) -> dict[str, object]:
     return {
         name: response.value.model_dump(mode="json"),
-        "model_usage": {
-            "calls": response.telemetry.calls,
-            "duration_ms": response.telemetry.duration_ms,
-            "prompt_tokens": response.telemetry.prompt_tokens,
-            "completion_tokens": response.telemetry.completion_tokens,
-            "structure_repair_attempts": response.telemetry.structure_repair_attempts,
-        },
+        "model_usage": _model_usage(response),
+    }
+
+
+def _model_usage(response: ModelResponse) -> dict[str, int]:
+    return {
+        "calls": response.telemetry.calls,
+        "duration_ms": response.telemetry.duration_ms,
+        "prompt_tokens": response.telemetry.prompt_tokens,
+        "completion_tokens": response.telemetry.completion_tokens,
+        "structure_repair_attempts": response.telemetry.structure_repair_attempts,
     }
 
 
@@ -379,6 +441,8 @@ def main() -> None:
         _validate_workflows(args, catalog)
     elif args.command == "run-workflow":
         _run_workflow(args, catalog)
+    elif args.command == "plan-agent":
+        _plan_agent(args, catalog)
     elif args.command == "discover-tests":
         _discover_semantic_tests(args, catalog)
     elif args.command == "validate-tests":

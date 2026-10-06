@@ -113,6 +113,20 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 运行器会重新校验 discovery，生成每一步的合法请求，通过受限 HTTP 工具执行，从成功响应提取变量并分别用响应字段 Schema 和目标参数 Schema 校验，再注入下游请求。失败、提取错误、预算耗尽或未批准的 DELETE 会阻断剩余步骤。输出包含脱敏的 `run.json`、`report.md` 和 `trajectory.jsonl`；只有明确传入 `--approve-delete` 才允许执行 DELETE。
 
+让 DeepSeek 在已经校验的测试与工作流中生成初始 Agent 计划（只规划，不发送 HTTP）：
+
+```bash
+.venv/bin/api-doctor plan-agent \
+  --spec examples/buggy-shop/openapi.yaml \
+  --test-plan runs/m2/final-test-plan.json \
+  --workflows runs/m2/validated-workflows.json \
+  --max-tests 8 \
+  --max-steps 10 \
+  --output runs/m2/initial-agent-plan.json
+```
+
+模型只能引用输入 inventory 中的 `item_id` 并声明优先级、理由和请求成本。代码重新计算真实成本，检查 ID、请求预算和 Agent step 预算；模型伪造 ID、谎报成本或超预算时使用确定性 fallback。没有 `--approve-delete` 时，包含 DELETE 的工作流不会进入 Planner inventory 或 fallback。输出是显式 `AgentState`，此命令当前尚不执行 pending actions。
+
 从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
 
 ```bash

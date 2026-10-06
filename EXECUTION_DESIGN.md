@@ -1367,6 +1367,17 @@ M2-D 工作流运行时当前实现状态（2026-10-06）：
 - 一次真实本地运行执行 DeepSeek 发现的 `createOrder → getOrder`：`createOrder` 返回 201 和 `id=1`，代码提取并校验 `order_id` 后注入 `getOrder.path.id`，实际请求 `/orders/1` 返回 200；2 步均通过，0 failed、0 error、0 blocked。该数据只对应当前保存 discovery、示例服务和本次运行；
 - 这一步接通了“LLM 工作流发现 → 确定性校验/编译 → 真实 HTTP → 变量 Working Memory → 下游工具调用”，但尚不是完整 Agent 闭环；统一 Planner、语义测试计划执行、Observation 分析和 replan 仍待实现。
 
+M2-E AgentState 与初始 Planner 当前实现状态（2026-10-06）：
+
+- 已定义显式单次运行 `AgentState`，保存 phase、plan version、pending/completed actions、Observation、Hypothesis、请求预算、Agent step 预算、已执行指纹、DELETE 批准状态和终止原因；当前阶段只初始化状态，尚未执行统一队列；
+- `api-doctor plan-agent` 将已融合的 `FinalTestPlan` 和已校验的 `CompiledWorkflow` 以精简 inventory 交给 DeepSeek；模型只能选择现有 `test_case/workflow item_id`、优先级、理由和估算请求数，不能生成 URL、请求体、operation 或断言；
+- 初始规划本身消耗一个 Agent step。代码重新计算 workflow step 数和单用例成本，校验引用、成本、`max_tests` 与剩余 Agent step 预算；无效结构仍由 Gateway 最多修复一次，语义越权或超预算则不再次相信模型说明，而是启用确定性 fallback；
+- 未显式批准 DELETE 时，危险工作流既不会发送给 Planner，也不会进入 fallback；批准状态写入 AgentState，但真正执行时仍需通过 HTTP safety policy 再检查一次；
+- 单元测试使用 FakeGateway 和真实编译产物覆盖紧凑上下文、有效状态初始化、伪造 ID、成本谎报、预算溢出和未批准 DELETE 隔离，不在 prompt 中预写选择答案；
+- 一次真实 DeepSeek Planner 在 8 请求、10 Agent step 预算下选择 1 个两步 `order_create_read` workflow 和 6 个可信单接口用例，总成本 8，引用与成本校验全部通过，无 fallback；调用 1 次、模型耗时 3,034 ms、prompt 2,827 tokens、completion 569 tokens。该数据仅对应当前保存 inventory、模型和本次运行；
+- 开发验证中的另一次真实调用里，模型文字声称成本为 8、结构化选择实际成本为 9，确定性校验成功拒绝并触发 fallback；该次临时产物后来被最终验证覆盖，因此只作为开发观察，不作为保存运行指标；
+- 下一阶段把 pending actions 接入统一执行循环，每个真实 HTTP Observation 更新状态并消耗预算；之后才加入失败触发的 Analyzer 与局部 replan。
+
 ### M3：可交付性
 
 - pytest renderer 和 JUnit XML；
