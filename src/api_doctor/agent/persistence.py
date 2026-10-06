@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from api_doctor.agent.models import AgentActionRecord, AgentRun, AgentState
+from api_doctor.agent.pipeline import AgentPipelineResult
 from api_doctor.observability import redact
 
 
 class AgentArtifactStore:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
+        if output_dir.exists() and not output_dir.is_dir():
+            raise FileExistsError(f"output path is not a directory: {output_dir}")
+        if output_dir.exists() and any(output_dir.iterdir()):
+            raise FileExistsError(f"output directory is not empty: {output_dir}")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_path = output_dir / "checkpoint.json"
         self.trajectory_path = output_dir / "trajectory.jsonl"
-        self.trajectory_path.write_text("", encoding="utf-8")
 
     def checkpoint(self, state: AgentState, record: AgentActionRecord) -> None:
         payload = redact(
@@ -55,6 +60,8 @@ class AgentArtifactStore:
             encoding="utf-8",
         )
         report_path.write_text(render_agent_report(run), encoding="utf-8")
+        if not self.trajectory_path.exists():
+            self.trajectory_path.touch()
         if not self.checkpoint_path.exists():
             self.checkpoint_path.write_text(
                 json.dumps(
@@ -71,6 +78,30 @@ class AgentArtifactStore:
             "trajectory": self.trajectory_path,
             "report": report_path,
         }
+
+    def finalize_pipeline(self, result: AgentPipelineResult) -> dict[str, Path]:
+        paths = self.finalize(result.run)
+        pipeline_path = self.output_dir / "pipeline.json"
+        pipeline_path.write_text(
+            json.dumps(redact(_pipeline_payload(result)), ensure_ascii=False, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        paths["pipeline"] = pipeline_path
+        return paths
+
+
+def _pipeline_payload(result: AgentPipelineResult) -> dict[str, object]:
+    return {
+        "semantic_discovery": result.semantic_discovery.model_dump(mode="json"),
+        "test_plan": result.test_plan.model_dump(mode="json"),
+        "workflow_discovery": result.workflow_discovery.model_dump(mode="json"),
+        "workflow_validation": result.workflow_validation.model_dump(mode="json"),
+        "planning": result.planning.model_dump(mode="json"),
+        "model_usage": {
+            name: asdict(usage) for name, usage in result.model_usage.items()
+        },
+    }
 
 
 def render_agent_report(run: AgentRun) -> str:

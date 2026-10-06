@@ -50,10 +50,10 @@ def test_deterministic_runner_executes_budget_and_writes_redacted_artifacts(
     )
     paths = save_run_artifacts(run, tmp_path / "run")
 
-    assert run.metrics.operations == 5
-    assert run.metrics.candidates == 30
+    assert run.metrics.operations == 6
+    assert run.metrics.candidates == 34
     assert run.metrics.executed == 6
-    assert run.metrics.blocked == 24
+    assert run.metrics.blocked == 28
     assert run.metrics.passed + run.metrics.failed + run.metrics.errors == 6
     get_user = next(
         record.compiled_case
@@ -67,7 +67,7 @@ def test_deterministic_runner_executes_budget_and_writes_redacted_artifacts(
     } >= {("getUser", "path", "id"), ("deleteUser", "path", "id")}
     assert paths["json"].exists()
     assert paths["markdown"].exists()
-    assert len(paths["trajectory"].read_text().splitlines()) == 30
+    assert len(paths["trajectory"].read_text().splitlines()) == 34
     assert "## Summary" in paths["markdown"].read_text()
     assert "secret" not in paths["json"].read_text()
 

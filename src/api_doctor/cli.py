@@ -7,14 +7,16 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-from api_doctor.agent.models import AgentState
-from api_doctor.agent.persistence import AgentArtifactStore
-from api_doctor.agent.planning import initialize_agent_state, propose_initial_plan
-from api_doctor.agent.runtime import run_agent_actions
+from api_doctor.cli_agent import AGENT_COMMANDS, add_agent_commands, run_agent_command
+from api_doctor.cli_support import (
+    add_generation_options as _add_generation_options,
+    add_spec_argument as _add_spec,
+    run_config,
+    write_json as _write_json,
+)
 from api_doctor.config import load_dotenv
-from api_doctor.execution.models import RunConfig
 from api_doctor.execution.runner import run_baseline
 from api_doctor.execution.workflow_runner import run_workflow
 from api_doctor.generation.schema_candidates import generate_schema_candidates
@@ -27,32 +29,13 @@ from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.openapi import load_openapi
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.reporting.report import save_run_artifacts, save_workflow_run_artifacts
-from api_doctor.testspec.fusion import CandidateIssue, FinalTestPlan, fuse_test_cases
-from api_doctor.testspec.openapi_compiler import OpenAPICompileError, compile_openapi_candidate
+from api_doctor.testspec.openapi_compiler import compile_openapi_candidate
+from api_doctor.testspec.plan_builder import build_final_test_plan
 from api_doctor.testspec.semantic_validation import (
     SemanticValidationResult,
     validate_semantic_candidates,
 )
-from api_doctor.workflows.validation import WorkflowValidationResult, validate_workflows
-
-
-DEFAULT_SEED = 20260924
-DEFAULT_TIME_ANCHOR = "2026-10-02T10:00:00+00:00"
-
-
-def _add_spec(command: argparse.ArgumentParser, *, output_required: bool = False) -> None:
-    command.add_argument("--spec", type=Path, required=True)
-    command.add_argument(
-        "--output",
-        type=Path,
-        required=output_required,
-        help="write the command artifact to this path",
-    )
-
-
-def _add_generation_options(command: argparse.ArgumentParser) -> None:
-    command.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    command.add_argument("--time-anchor", default=DEFAULT_TIME_ANCHOR)
+from api_doctor.workflows.validation import validate_workflows
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -103,34 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_workflow_command.add_argument("--timeout", type=float, default=5.0)
     run_workflow_command.add_argument("--approve-delete", action="store_true")
 
-    plan_agent = commands.add_parser(
-        "plan-agent",
-        help="ask DeepSeek to prioritize validated tests and workflows without HTTP",
-    )
-    _add_spec(plan_agent, output_required=True)
-    plan_agent.add_argument("--test-plan", type=Path, required=True)
-    plan_agent.add_argument("--workflows", type=Path, required=True)
-    plan_agent.add_argument("--max-tests", type=int, default=10)
-    plan_agent.add_argument("--max-steps", type=int, default=20)
-    plan_agent.add_argument("--approve-delete", action="store_true")
-    plan_agent.add_argument(
-        "--log-level",
-        choices=("DEBUG", "INFO", "WARNING", "ERROR"),
-        default="INFO",
-    )
-
-    run_agent = commands.add_parser(
-        "run-agent-actions",
-        help="execute a validated AgentState queue without additional LLM calls",
-    )
-    _add_spec(run_agent, output_required=True)
-    _add_generation_options(run_agent)
-    run_agent.add_argument("--state", type=Path, required=True)
-    run_agent.add_argument("--test-plan", type=Path, required=True)
-    run_agent.add_argument("--workflows", type=Path, required=True)
-    run_agent.add_argument("--base-url", required=True)
-    run_agent.add_argument("--timeout", type=float, default=5.0)
-    run_agent.add_argument("--approve-delete", action="store_true")
+    add_agent_commands(commands)
 
     discover_tests = commands.add_parser(
         "discover-tests",
@@ -172,26 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _write_json(value: Any, output: Path | None) -> None:
-    rendered = json.dumps(value, ensure_ascii=False, indent=2)
-    if output is None:
-        print(rendered)
-        return
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(rendered + "\n", encoding="utf-8")
-
-
 def _run(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    """Execute the only end-to-end mode and persist its report artifacts."""
-    config = RunConfig(
-        base_url=args.base_url,
-        seed=args.seed,
-        time_anchor=datetime.fromisoformat(args.time_anchor),
-        max_tests=args.max_tests,
-        approve_delete=args.approve_delete,
-        timeout_seconds=args.timeout,
-    )
-    result = run_baseline(catalog, config)
+    """Execute the deterministic baseline and persist its report artifacts."""
+    result = run_baseline(catalog, run_config(args))
     artifacts = save_run_artifacts(result, args.output)
     _write_json(
         {
@@ -260,14 +199,7 @@ def _run_workflow(args: argparse.Namespace, catalog: OperationCatalog) -> None:
     run = run_workflow(
         review.compiled_workflow,
         catalog,
-        RunConfig(
-            base_url=args.base_url,
-            seed=args.seed,
-            time_anchor=datetime.fromisoformat(args.time_anchor),
-            max_tests=args.max_tests,
-            approve_delete=args.approve_delete,
-            timeout_seconds=args.timeout,
-        ),
+        run_config(args),
     )
     artifacts = save_workflow_run_artifacts(run, args.output)
     _write_json(
@@ -275,94 +207,6 @@ def _run_workflow(args: argparse.Namespace, catalog: OperationCatalog) -> None:
             "run_id": run.run_id,
             "workflow_id": run.workflow_id,
             "metrics": run.metrics.model_dump(mode="json"),
-            "artifacts": {name: str(path) for name, path in artifacts.items()},
-        },
-        output=None,
-    )
-
-
-def _plan_agent(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    plan_payload = json.loads(args.test_plan.read_text(encoding="utf-8"))
-    plan = FinalTestPlan.model_validate(plan_payload.get("plan", plan_payload))
-    workflow_payload = json.loads(args.workflows.read_text(encoding="utf-8"))
-    validation = WorkflowValidationResult.model_validate(
-        {"reviews": workflow_payload.get("reviews", [])}
-    )
-    workflows = [
-        review.compiled_workflow
-        for review in validation.reviews
-        if review.compiled_workflow is not None
-    ]
-    response = _call_llm_discovery(
-        args,
-        lambda gateway: propose_initial_plan(
-            plan,
-            workflows,
-            max_tests=args.max_tests,
-            max_steps=args.max_steps,
-            delete_approved=args.approve_delete,
-            gateway=gateway,
-        ),
-    )
-    result = initialize_agent_state(
-        spec_fingerprint=catalog.fingerprint,
-        plan=plan,
-        workflows=workflows,
-        proposed_plan=response.value,
-        max_tests=args.max_tests,
-        max_steps=args.max_steps,
-        delete_approved=args.approve_delete,
-    )
-    _write_json(
-        {
-            "planning": result.model_dump(mode="json"),
-            "model_usage": _model_usage(response),
-        },
-        args.output,
-    )
-
-
-def _run_agent_actions(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    state_payload = json.loads(args.state.read_text(encoding="utf-8"))
-    state = AgentState.model_validate(
-        state_payload.get("planning", state_payload).get("state", state_payload)
-    )
-    plan_payload = json.loads(args.test_plan.read_text(encoding="utf-8"))
-    plan = FinalTestPlan.model_validate(plan_payload.get("plan", plan_payload))
-    workflow_payload = json.loads(args.workflows.read_text(encoding="utf-8"))
-    validation = WorkflowValidationResult.model_validate(
-        {"reviews": workflow_payload.get("reviews", [])}
-    )
-    workflows = [
-        review.compiled_workflow
-        for review in validation.reviews
-        if review.compiled_workflow is not None
-    ]
-    store = AgentArtifactStore(args.output)
-    run = run_agent_actions(
-        state,
-        plan,
-        workflows,
-        catalog,
-        RunConfig(
-            base_url=args.base_url,
-            seed=args.seed,
-            time_anchor=datetime.fromisoformat(args.time_anchor),
-            max_tests=max(state.remaining_test_budget, 1),
-            approve_delete=args.approve_delete,
-            timeout_seconds=args.timeout,
-        ),
-        checkpoint=store.checkpoint,
-    )
-    artifacts = store.finalize(run)
-    _write_json(
-        {
-            "run_id": run.state.run_id,
-            "phase": run.state.phase,
-            "observations": len(run.state.observations),
-            "remaining_test_budget": run.state.remaining_test_budget,
-            "remaining_step_budget": run.state.remaining_step_budget,
-            "termination_reason": run.state.termination_reason,
             "artifacts": {name: str(path) for name, path in artifacts.items()},
         },
         output=None,
@@ -405,51 +249,14 @@ def _validate_semantic_tests(args: argparse.Namespace, catalog: OperationCatalog
 
 
 def _fuse_tests(args: argparse.Namespace, catalog: OperationCatalog) -> None:
-    anchor = datetime.fromisoformat(args.time_anchor)
-    compiled = []
-    rejected: list[CandidateIssue] = []
-    unsupported: list[CandidateIssue] = []
-
-    for index, candidate in enumerate(generate_schema_candidates(catalog), start=1):
-        if candidate.status == "not_compilable":
-            unsupported.append(
-                CandidateIssue(
-                    candidate=candidate,
-                    reasons=[candidate.unsupported_reason or "candidate is not compilable"],
-                )
-            )
-            continue
-        try:
-            compiled.append(
-                compile_openapi_candidate(
-                    candidate,
-                    catalog,
-                    case_number=index,
-                    seed=args.seed,
-                    anchor=anchor,
-                )
-            )
-        except OpenAPICompileError as error:
-            rejected.append(CandidateIssue(candidate=candidate, reasons=[str(error)]))
-
-    validation = _semantic_validation(args, catalog)
-    for review in validation.reviews:
-        if review.verdict == "rejected":
-            rejected.append(CandidateIssue(candidate=review.candidate, reasons=review.errors))
-        elif review.compiled_case is not None:
-            compiled.append(review.compiled_case)
-        else:
-            unsupported.append(
-                CandidateIssue(
-                    candidate=review.candidate,
-                    reasons=[review.candidate.unsupported_reason or "candidate is not compilable"],
-                )
-            )
-
-    plan = fuse_test_cases(
-        compiled,
-        rejected_candidates=rejected,
-        unsupported_candidates=unsupported,
+    payload = json.loads(args.input.read_text(encoding="utf-8"))
+    discovery = SemanticDiscovery.model_validate(payload.get("discovery", payload))
+    plan = build_final_test_plan(
+        catalog,
+        discovery.candidates,
+        load_business_rules(args.rules),
+        seed=args.seed,
+        anchor=datetime.fromisoformat(args.time_anchor),
     )
     _write_json(
         {
@@ -504,10 +311,8 @@ def main() -> None:
         _validate_workflows(args, catalog)
     elif args.command == "run-workflow":
         _run_workflow(args, catalog)
-    elif args.command == "plan-agent":
-        _plan_agent(args, catalog)
-    elif args.command == "run-agent-actions":
-        _run_agent_actions(args, catalog)
+    elif args.command in AGENT_COMMANDS:
+        run_agent_command(args, catalog)
     elif args.command == "discover-tests":
         _discover_semantic_tests(args, catalog)
     elif args.command == "validate-tests":

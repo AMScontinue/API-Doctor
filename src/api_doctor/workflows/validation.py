@@ -59,6 +59,14 @@ class WorkflowReview(StrictModel):
 class WorkflowValidationResult(StrictModel):
     reviews: list[WorkflowReview]
 
+    def compiled_workflows(self) -> list[CompiledWorkflow]:
+        """Return only proposals that passed deterministic validation."""
+        return [
+            review.compiled_workflow
+            for review in self.reviews
+            if review.compiled_workflow is not None
+        ]
+
     def summary(self) -> dict[str, int]:
         return {
             "total": len(self.reviews),

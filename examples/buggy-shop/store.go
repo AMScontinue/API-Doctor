@@ -44,9 +44,24 @@ func (s *store) reset() {
 	s.orders = make(map[int]order)
 }
 
-func (s *store) createUser(value user) user {
+func (s *store) createUser(value user) (user, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, existing := range s.users {
+		if existing.Email == value.Email {
+			return user{}, false
+		}
+	}
+	return s.insertUser(value), true
+}
+
+func (s *store) createDuplicateUser(value user) user {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.insertUser(value)
+}
+
+func (s *store) insertUser(value user) user {
 	value.ID = s.nextUserID
 	s.nextUserID++
 	s.users[value.ID] = value
@@ -85,4 +100,16 @@ func (s *store) getOrder(id int) (order, bool) {
 	defer s.mu.RUnlock()
 	value, ok := s.orders[id]
 	return value, ok
+}
+
+func (s *store) updateOrderStatus(id int, status string) (order, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.orders[id]
+	if !ok {
+		return order{}, false
+	}
+	value.Status = status
+	s.orders[id] = value
+	return value, true
 }

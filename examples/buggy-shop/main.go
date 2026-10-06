@@ -8,10 +8,12 @@ import (
 )
 
 type config struct {
-	address               string
-	testMode              bool
-	acceptInvalidEmail    bool
-	unknownUserReturns200 bool
+	address                string
+	testMode               bool
+	acceptInvalidEmail     bool
+	unknownUserReturns200  bool
+	acceptDuplicateEmail   bool
+	confirmReturnsConflict bool
 }
 
 func loadConfig() config {
@@ -24,10 +26,12 @@ func loadConfig() config {
 		address = "127.0.0.1:18080"
 	}
 	return config{
-		address:               address,
-		testMode:              os.Getenv("BUGGY_SHOP_TEST_MODE") == "1",
-		acceptInvalidEmail:    defects["invalid-email-accepted"],
-		unknownUserReturns200: defects["unknown-user-200"],
+		address:                address,
+		testMode:               os.Getenv("BUGGY_SHOP_TEST_MODE") == "1",
+		acceptInvalidEmail:     defects["invalid-email-accepted"],
+		unknownUserReturns200:  defects["unknown-user-200"],
+		acceptDuplicateEmail:   defects["duplicate-email-accepted"],
+		confirmReturnsConflict: defects["confirm-conflict"],
 	}
 }
 

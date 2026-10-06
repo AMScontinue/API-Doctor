@@ -73,6 +73,9 @@ def test_semantic_prompt_contains_descriptions_rules_and_supported_dsl():
         "discount-not-over-total",
         "cash-card-token-forbidden",
         "card-token-required",
+        "unique-user-email",
+        "cancelled-order-terminal",
+        "repeated-order-status-conflict",
     }
     assert set(prompt["supported_mutations"]) == {
         "set_value",

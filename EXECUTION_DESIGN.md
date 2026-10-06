@@ -39,6 +39,7 @@ POST /users
 GET  /users/{id}
 POST /orders
 GET  /orders/{id}
+PATCH /orders/{id}
 DELETE /users/{id}
 POST /test/reset
 ```
@@ -57,6 +58,8 @@ curl -X POST http://localhost:8080/test/reset
 这个 reset 机制只是演示适配器，不是通用 Agent 对任意服务的强制要求。测试其他服务时，用户可以不配置 reset，或提供该服务自己的初始化脚本/命令。
 
 演示服务包含可配置缺陷，但 Agent 的 prompt 和运行时不能读取缺陷清单。至少保留一组无缺陷配置，用于测试误报率。
+
+M2 的增强样例加入用户 email 唯一性与订单状态转换：`created` 可进入 `confirmed/cancelled`，`confirmed` 可进入 `cancelled`，`cancelled` 为终态，重复应用当前状态返回 409。缺陷开关 `duplicate-email-accepted` 与 `confirm-conflict` 分别用于检验重复请求策略和失败 Observation；它们不能写入 Agent prompt 或通用代码。
 
 ## 3. Agent 接收的输入
 
@@ -1388,6 +1391,10 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 - 单元测试覆盖混合队列、workflow 变量合并、预算扣减、失败暂停、重复指纹、篡改成本、预算不足、checkpoint 和 artifact；不调用 LLM，也不伪造 planner 成功率；
 - 一次真实本地运行消费保存的 DeepSeek 初始计划：执行 1 个两步 `order_create_read` workflow 与 6 个单接口用例，共 7 个 action、8 个 HTTP 请求，8/8 passed，记录 8 个请求指纹和 `order_id=1` 血缘；request budget 从 8 降至 0，Agent step budget 在扣除首次规划与 8 次工具步骤后剩余 1，最终因 pending queue 为空结束；
 - 当前已经接通“LLM initial plan → validated AgentState → 真实混合工具执行 → Observation/Working Memory/checkpoint”。尚缺失败 Observation 的 LLM Analyzer、诊断 action 校验和 `plan_version` 驱动的局部 replan。
+- `api-doctor agent-run` 通过应用层 `AgentPipeline` 串联语义发现、确定性候选编译与融合、workflow 发现与校验、初始规划和 action 执行；阶段产物以类型化对象在内存中传递，文件仅承担审计、报告和后续恢复，不作为正常主流程的阶段间通信机制。
+- 测试计划构建集中在独立的确定性 `build_final_test_plan` 服务中，CLI 不再复制机械候选编译、语义候选校验和融合逻辑。阶段子命令继续保留为开发、检查和复现实验的接口。
+- Pipeline 与文件持久化解耦，只接收可选 checkpoint 回调并返回完整类型化结果。CLI 负责将脱敏的语义发现、最终测试计划、workflow 发现与校验、初始规划及分阶段模型用量保存到 `pipeline.json`；已包含文件的运行目录会被拒绝，不能静默覆盖历史轨迹。
+- 未获得 DELETE 批准时，`requires_approval` 的单测试和 workflow 都不能进入 LLM Planner inventory、可信 inventory 或确定性 fallback；运行时安全策略继续作为最后一道独立防线。
 
 ### M3：可交付性
 

@@ -34,6 +34,8 @@ paths:
                 id: "$response.body#/id"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationError"
   /users/{id}:
@@ -85,6 +87,10 @@ paths:
               operationId: getOrder
               parameters:
                 id: "$response.body#/id"
+            UpdateCreatedOrder:
+              operationId: updateOrderStatus
+              parameters:
+                id: "$response.body#/id"
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":
@@ -105,6 +111,34 @@ paths:
                 $ref: "#/components/schemas/Order"
         "404":
           $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateOrderStatus
+      summary: Confirm or cancel an order
+      description: >-
+        A created order can be confirmed or cancelled. A confirmed order can be
+        cancelled. A cancelled order is terminal, and applying the current status
+        again returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderStatus"
+      responses:
+        "200":
+          description: Order status updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 components:
   parameters:
     ResourceID:
@@ -154,7 +188,13 @@ components:
           required: [id, status]
           properties:
             id: {type: integer, minimum: 1}
-            status: {type: string, enum: [created]}
+            status: {type: string, enum: [created, confirmed, cancelled]}
+    UpdateOrderStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {type: string, enum: [confirmed, cancelled]}
     Error:
       type: object
       additionalProperties: false
@@ -176,6 +216,12 @@ components:
             $ref: "#/components/schemas/Error"
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Resource state conflicts with the requested operation
       content:
         application/json:
           schema:

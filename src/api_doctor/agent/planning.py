@@ -9,11 +9,25 @@ from api_doctor.agent.models import (
     PlannedAction,
 )
 from api_doctor.llm.gateway import ModelGateway, ModelResponse
-from api_doctor.testspec.fusion import FinalTestPlan
+from api_doctor.testspec.fusion import FinalTestPlan, PlannedCase
 from api_doctor.workflows.validation import CompiledWorkflow
 
 
-def _case_context(plan: FinalTestPlan) -> list[dict[str, object]]:
+def _available_cases(
+    plan: FinalTestPlan,
+    delete_approved: bool,
+) -> list[PlannedCase]:
+    return [
+        item
+        for item in plan.cases
+        if delete_approved or item.case.risk != "requires_approval"
+    ]
+
+
+def _case_context(
+    plan: FinalTestPlan,
+    delete_approved: bool,
+) -> list[dict[str, object]]:
     return [
         {
             "item_id": item.case.case_id,
@@ -25,7 +39,7 @@ def _case_context(plan: FinalTestPlan) -> list[dict[str, object]]:
             "sources": sorted({source.source for source in item.case.assertions}),
             "estimated_requests": 1,
         }
-        for item in plan.cases
+        for item in _available_cases(plan, delete_approved)
     ]
 
 
@@ -60,10 +74,10 @@ def build_initial_plan_prompt(
             f"Initial planning consumes one agent step; selected request cost must not exceed {executable_step_budget} remaining agent steps.",
             "Prefer workflows that unlock validated cross-operation coverage.",
             "Balance happy paths, contract negatives, and semantic business-rule tests.",
-            "DELETE workflows still require human approval; selection does not grant approval.",
+            "DELETE actions require human approval; selection does not grant approval.",
             "Use only the provided item_id values and matching kind.",
         ],
-        "test_cases": _case_context(plan),
+        "test_cases": _case_context(plan, delete_approved),
         "workflows": _workflow_context(
             [item for item in workflows if delete_approved or not item.requires_approval]
         ),
@@ -101,7 +115,7 @@ def _inventory(
 ) -> dict[tuple[str, str], int]:
     inventory = {
         ("test_case", item.case.case_id): 1
-        for item in plan.cases
+        for item in _available_cases(plan, delete_approved)
     }
     inventory.update(
         {
@@ -166,7 +180,7 @@ def _fallback_plan(
                 )
             )
             remaining -= cost
-    for item in plan.cases:
+    for item in _available_cases(plan, delete_approved):
         if remaining < 1:
             break
         selected.append(

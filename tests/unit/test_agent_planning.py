@@ -211,3 +211,42 @@ def test_unapproved_delete_workflow_is_absent_from_inventory_and_fallback():
         delete_approved=False,
     )
     assert {item["item_id"] for item in prompt["workflows"]} == {"create_read_user"}
+
+
+def test_unapproved_delete_test_case_is_absent_from_prompt_and_fallback():
+    catalog, plan, workflows = _inputs()
+    delete_case = plan.cases[0].model_copy(
+        deep=True,
+        update={
+            "case": plan.cases[0].case.model_copy(
+                update={
+                    "case_id": "delete-case",
+                    "risk": "requires_approval",
+                    "request": plan.cases[0].case.request.model_copy(
+                        update={"method": "DELETE"}
+                    ),
+                }
+            )
+        },
+    )
+    dangerous_plan = plan.model_copy(update={"cases": [delete_case]})
+
+    prompt = build_initial_plan_prompt(
+        dangerous_plan,
+        workflows,
+        max_tests=3,
+        max_steps=4,
+        delete_approved=False,
+    )
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=dangerous_plan,
+        workflows=[],
+        proposed_plan=InitialPlanProposal(strategy="unsafe", selected=[]),
+        max_tests=3,
+        max_steps=4,
+        delete_approved=False,
+    )
+
+    assert prompt["test_cases"] == []
+    assert result.state.pending_actions == []

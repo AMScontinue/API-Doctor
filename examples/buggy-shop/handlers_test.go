@@ -75,6 +75,53 @@ func TestOrderLifecycle(t *testing.T) {
 	}
 }
 
+func TestUserEmailMustBeUnique(t *testing.T) {
+	handler := newHandler(newStore(), config{})
+	body := map[string]string{"name": "Ada", "email": "ada@example.test"}
+	if response := request(t, handler, http.MethodPost, "/users", body); response.Code != http.StatusCreated {
+		t.Fatalf("first create status = %d", response.Code)
+	}
+	if response := request(t, handler, http.MethodPost, "/users", body); response.Code != http.StatusConflict {
+		t.Fatalf("duplicate create status = %d", response.Code)
+	}
+}
+
+func TestOrderStatusTransitions(t *testing.T) {
+	handler := newHandler(newStore(), config{})
+	created := request(t, handler, http.MethodPost, "/orders", map[string]any{
+		"product_id": 1, "quantity": 2, "total_amount": 20,
+		"discount_amount": 2, "start_time": "2026-10-02T10:00:00Z",
+		"end_time": "2026-10-02T11:00:00Z", "payment_method": "cash",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", created.Code)
+	}
+	confirmed := request(t, handler, http.MethodPatch, "/orders/1", map[string]string{
+		"status": "confirmed",
+	})
+	if confirmed.Code != http.StatusOK || decode[order](t, confirmed).Status != "confirmed" {
+		t.Fatalf("confirm failed: status=%d", confirmed.Code)
+	}
+	repeated := request(t, handler, http.MethodPatch, "/orders/1", map[string]string{
+		"status": "confirmed",
+	})
+	if repeated.Code != http.StatusConflict {
+		t.Fatalf("repeated confirm status = %d", repeated.Code)
+	}
+	cancelled := request(t, handler, http.MethodPatch, "/orders/1", map[string]string{
+		"status": "cancelled",
+	})
+	if cancelled.Code != http.StatusOK || decode[order](t, cancelled).Status != "cancelled" {
+		t.Fatalf("cancel failed: status=%d", cancelled.Code)
+	}
+	terminal := request(t, handler, http.MethodPatch, "/orders/1", map[string]string{
+		"status": "confirmed",
+	})
+	if terminal.Code != http.StatusConflict {
+		t.Fatalf("terminal transition status = %d", terminal.Code)
+	}
+}
+
 func TestDefectsAreExplicitlyConfigurable(t *testing.T) {
 	clean := newHandler(newStore(), config{})
 	invalid := request(t, clean, http.MethodPost, "/users", map[string]string{
@@ -94,6 +141,29 @@ func TestDefectsAreExplicitlyConfigurable(t *testing.T) {
 	unknown := request(t, buggy, http.MethodGet, "/users/999", nil)
 	if unknown.Code != http.StatusOK {
 		t.Fatalf("buggy unknown user status = %d", unknown.Code)
+	}
+}
+
+func TestStatefulDefectsAreExplicitlyConfigurable(t *testing.T) {
+	data := newStore()
+	handler := newHandler(data, config{
+		acceptDuplicateEmail:   true,
+		confirmReturnsConflict: true,
+	})
+	body := map[string]string{"name": "Ada", "email": "ada@example.test"}
+	request(t, handler, http.MethodPost, "/users", body)
+	if response := request(t, handler, http.MethodPost, "/users", body); response.Code != http.StatusCreated {
+		t.Fatalf("duplicate defect status = %d", response.Code)
+	}
+	request(t, handler, http.MethodPost, "/orders", map[string]any{
+		"product_id": 1, "quantity": 2, "total_amount": 20,
+		"discount_amount": 2, "start_time": "2026-10-02T10:00:00Z",
+		"end_time": "2026-10-02T11:00:00Z", "payment_method": "cash",
+	})
+	if response := request(t, handler, http.MethodPatch, "/orders/1", map[string]string{
+		"status": "confirmed",
+	}); response.Code != http.StatusConflict {
+		t.Fatalf("confirm defect status = %d", response.Code)
 	}
 }
 

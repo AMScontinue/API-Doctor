@@ -27,6 +27,10 @@ type orderRequest struct {
 	CardToken      *string  `json:"card_token"`
 }
 
+type orderStatusRequest struct {
+	Status string `json:"status"`
+}
+
 func newHandler(data *store, cfg config) http.Handler {
 	app := &api{store: data, config: cfg}
 	mux := http.NewServeMux()
@@ -81,7 +85,16 @@ func (a *api) users(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "invalid user"})
 		return
 	}
-	writeJSON(w, http.StatusCreated, a.store.createUser(input))
+	if a.config.acceptDuplicateEmail {
+		writeJSON(w, http.StatusCreated, a.store.createDuplicateUser(input))
+		return
+	}
+	value, created := a.store.createUser(input)
+	if !created {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "email already exists"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
 }
 
 func (a *api) userByID(w http.ResponseWriter, r *http.Request) {
@@ -148,21 +161,47 @@ func (a *api) orders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) orderByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
 	id, ok := resourceID(r.URL.Path, "/orders/")
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
 		return
 	}
-	value, found := a.store.getOrder(id)
+	switch r.Method {
+	case http.MethodGet:
+		value, found := a.store.getOrder(id)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	case http.MethodPatch:
+		a.updateOrderStatus(w, r, id)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (a *api) updateOrderStatus(w http.ResponseWriter, r *http.Request, id int) {
+	var input orderStatusRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.Status != "confirmed" && input.Status != "cancelled" {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "invalid status"})
+		return
+	}
+	current, found := a.store.getOrder(id)
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, value)
+	if current.Status == "cancelled" || current.Status == input.Status ||
+		(a.config.confirmReturnsConflict && input.Status == "confirmed") {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "invalid status transition"})
+		return
+	}
+	updated, _ := a.store.updateOrderStatus(id, input.Status)
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (a *api) reset(w http.ResponseWriter, r *http.Request) {

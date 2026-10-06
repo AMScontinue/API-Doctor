@@ -141,6 +141,20 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 统一执行器从可信 registry 解析每个 action，重新核对真实成本和 OpenAPI 指纹，执行单接口 `CompiledTestCase` 或跨接口 `CompiledWorkflow`，再把 Observation、变量、请求指纹和预算写回 AgentState。失败或错误会把 phase 切到 `analyzing` 并保留剩余队列；安全阻断和重复请求不会消耗 HTTP 预算。每个 action 后原子更新 `checkpoint.json` 并追加脱敏 trajectory。
 
+完整的单次 Agent 运行可以使用一条命令完成。各阶段对象直接在内存中传递，JSON 文件只用于审计、报告和后续恢复，不再是主流程的必需输入：
+
+```bash
+.venv/bin/api-doctor agent-run \
+  --spec examples/buggy-shop/openapi.yaml \
+  --rules examples/buggy-shop/rules.yaml \
+  --base-url http://localhost:8080 \
+  --max-tests 8 \
+  --max-steps 12 \
+  --output runs/m2/agent-run
+```
+
+当前闭环覆盖 LLM 语义候选发现、确定性测试计划构建、LLM workflow 发现与校验、LLM 初始规划、真实 HTTP 执行、状态更新和持久化。`pipeline.json` 保存脱敏后的发现、校验、计划和分阶段模型用量，`run.json` 保存执行结果；运行目录必须为空，程序不会覆盖已有运行。失败会停在 `analyzing`；Observation 驱动的诊断与局部 replan 属于下一阶段。
+
 从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
 
 ```bash

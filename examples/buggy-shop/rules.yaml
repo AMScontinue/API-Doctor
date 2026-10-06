@@ -15,3 +15,15 @@ rules:
     operation_id: createOrder
     description: card payments must provide card_token
     expected_status_codes: [422]
+  - id: unique-user-email
+    operation_id: createUser
+    description: creating a second user with the same email must return 409
+    expected_status_codes: [409]
+  - id: cancelled-order-terminal
+    operation_id: updateOrderStatus
+    description: a cancelled order cannot transition to another status
+    expected_status_codes: [409]
+  - id: repeated-order-status-conflict
+    operation_id: updateOrderStatus
+    description: applying the current order status again must return 409
+    expected_status_codes: [409]

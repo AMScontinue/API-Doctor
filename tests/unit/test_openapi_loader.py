@@ -64,6 +64,7 @@ def test_buggy_shop_contract_excludes_manual_reset_endpoint():
         "deleteUser",
         "createOrder",
         "getOrder",
+        "updateOrderStatus",
     }
     assert all(operation.path != "/test/reset" for operation in catalog.operations.values())
     created = next(

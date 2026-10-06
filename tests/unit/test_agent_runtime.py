@@ -1,6 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from api_doctor.agent.models import AgentState, PlannedAction
 from api_doctor.agent.persistence import AgentArtifactStore
 from api_doctor.agent.runtime import AgentRuntimeError, run_agent_actions
@@ -148,6 +150,18 @@ def test_executes_mixed_queue_updates_state_and_checkpoints(monkeypatch, tmp_pat
     assert len(artifacts["trajectory"].read_text().splitlines()) == 2
     assert artifacts["checkpoint"].exists()
     assert "## Observations" in artifacts["report"].read_text()
+
+
+def test_artifact_store_refuses_to_overwrite_existing_run(tmp_path):
+    output = tmp_path / "agent-run"
+    output.mkdir()
+    trajectory = output / "trajectory.jsonl"
+    trajectory.write_text("existing event\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="not empty"):
+        AgentArtifactStore(output)
+
+    assert trajectory.read_text(encoding="utf-8") == "existing event\n"
 
 
 def test_failure_pauses_queue_for_future_analyzer(monkeypatch):
