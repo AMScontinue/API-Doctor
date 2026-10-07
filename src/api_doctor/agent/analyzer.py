@@ -77,6 +77,32 @@ def analyze_observation(
     )
 
 
+def apply_analyzer_failure(state: AgentState, error: Exception) -> AppliedAnalysis:
+    """Apply a deterministic fallback without persisting unsafe exception content."""
+    updated = state.model_copy(deep=True)
+    updated.remaining_step_budget -= 1
+    error_summary = f"Analyzer unavailable ({type(error).__name__})"
+    if updated.remaining_step_budget == 0:
+        applied = "finish"
+        updated.phase = "finished"
+        updated.termination_reason = "agent step budget exhausted after analyzer failure"
+    elif updated.pending_actions:
+        applied = "continue_plan"
+        updated.phase = "executing"
+        updated.termination_reason = None
+    else:
+        applied = "finish"
+        updated.phase = "finished"
+        updated.termination_reason = "no pending action after analyzer failure"
+    return AppliedAnalysis(
+        state=updated,
+        record=AnalysisRecord(
+            applied_decision=applied,
+            analyzer_error=error_summary,
+        ),
+    )
+
+
 def apply_analysis_decision(
     state: AgentState,
     decision: AnalysisDecision,

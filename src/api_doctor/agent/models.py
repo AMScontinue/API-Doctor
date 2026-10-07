@@ -98,7 +98,7 @@ class AnalysisDecision(StrictModel):
 
 
 class AnalysisRecord(StrictModel):
-    proposed: AnalysisDecision
+    proposed: AnalysisDecision | None = None
     applied_decision: Literal[
         "continue_plan",
         "add_diagnostic_case",
@@ -107,6 +107,7 @@ class AnalysisRecord(StrictModel):
     ]
     validation_errors: list[str] = Field(default_factory=list)
     added_action: PlannedAction | None = None
+    analyzer_error: str | None = None
 
 
 class AgentState(StrictModel):

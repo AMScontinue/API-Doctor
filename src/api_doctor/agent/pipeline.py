@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from api_doctor.agent.analyzer import analyze_observation, apply_analysis_decision
+from api_doctor.agent.analyzer import (
+    analyze_observation,
+    apply_analysis_decision,
+    apply_analyzer_failure,
+)
 from api_doctor.agent.models import (
     AnalysisRecord,
     AgentRun,
@@ -140,17 +144,21 @@ class AgentPipeline:
                 state.termination_reason = "insufficient agent step budget for failure analysis"
                 break
 
-            response = analyze_observation(state, records[-1], catalog, self.gateway)
-            usage += response.telemetry
-            application = apply_analysis_decision(
-                state,
-                response.value,
-                catalog,
-                seed=config.seed,
-                anchor=config.time_anchor,
-                existing_case_ids={item.case.case_id for item in active_plan.cases},
-                existing_workflow_ids={item.workflow_id for item in active_workflows},
-            )
+            try:
+                response = analyze_observation(state, records[-1], catalog, self.gateway)
+            except Exception as error:
+                application = apply_analyzer_failure(state, error)
+            else:
+                usage += response.telemetry
+                application = apply_analysis_decision(
+                    state,
+                    response.value,
+                    catalog,
+                    seed=config.seed,
+                    anchor=config.time_anchor,
+                    existing_case_ids={item.case.case_id for item in active_plan.cases},
+                    existing_workflow_ids={item.workflow_id for item in active_workflows},
+                )
             state = application.state
             analyses.append(application.record)
             if analysis_checkpoint is not None:

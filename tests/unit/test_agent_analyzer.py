@@ -2,7 +2,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from api_doctor.agent.analyzer import apply_analysis_decision, build_analysis_prompt
+from api_doctor.agent.analyzer import (
+    apply_analysis_decision,
+    apply_analyzer_failure,
+    build_analysis_prompt,
+)
 from api_doctor.agent.models import (
     AnalysisDecision,
     AgentActionRecord,
@@ -229,3 +233,30 @@ def test_analysis_checkpoint_is_a_distinct_trajectory_event(tmp_path):
     assert event["event"] == "analysis"
     assert event["analysis"]["applied_decision"] == "continue_plan"
     assert checkpoint["state"]["remaining_step_budget"] == 4
+
+
+def test_analyzer_failure_uses_auditable_fallback_without_exception_message():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+
+    applied = apply_analyzer_failure(
+        _state(catalog), TimeoutError("secret provider response")
+    )
+
+    assert applied.state.phase == "executing"
+    assert applied.state.remaining_step_budget == 4
+    assert applied.record.proposed is None
+    assert applied.record.applied_decision == "continue_plan"
+    assert applied.record.analyzer_error == "Analyzer unavailable (TimeoutError)"
+    assert "secret" not in applied.record.analyzer_error
+
+
+def test_analyzer_failure_finishes_when_no_pending_action_remains():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+
+    applied = apply_analyzer_failure(
+        _state(catalog, pending=False), ValueError("invalid model output")
+    )
+
+    assert applied.state.phase == "finished"
+    assert applied.state.termination_reason == "no pending action after analyzer failure"
+    assert applied.record.applied_decision == "finish"

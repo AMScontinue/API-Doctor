@@ -167,17 +167,21 @@ def render_agent_report(run: AgentRun) -> str:
     if not run.analyses:
         lines.append("No failure required LLM analysis.")
     for index, analysis in enumerate(run.analyses, start=1):
+        proposed = analysis.proposed
         lines.extend(
             [
                 f"### Decision {index}",
                 "",
-                f"- Proposed: `{analysis.proposed.decision}`",
+                f"- Proposed: `{proposed.decision if proposed else 'unavailable'}`",
                 f"- Applied: `{analysis.applied_decision}`",
-                f"- Reason: {analysis.proposed.reason}",
             ]
         )
-        if analysis.proposed.hypothesis is not None:
-            lines.append(f"- Hypothesis: {analysis.proposed.hypothesis.statement}")
+        if proposed is not None:
+            lines.append(f"- Reason: {proposed.reason}")
+        if analysis.analyzer_error is not None:
+            lines.append(f"- Analyzer error: {analysis.analyzer_error}")
+        if proposed is not None and proposed.hypothesis is not None:
+            lines.append(f"- Hypothesis: {proposed.hypothesis.statement}")
         if analysis.added_action is not None:
             lines.append(
                 f"- Added action: `{analysis.added_action.kind}:"

@@ -1402,6 +1402,7 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 - Analyzer 每轮消耗一个 Agent step，决策、假设、校验错误和新 action 写入 `checkpoint.json`、`trajectory.jsonl`、`run.json` 和 Markdown 报告。当前实现“追加一个诊断 case 或 workflow”的最小局部调整，尚未实现取消/替换多个 pending action 或全量 replan。
 - `ParameterBinding.source=working_memory` 可引用本次 Agent run 中已验证的变量；宿主以变量名查找实际值，在编译和执行前均按目标 Schema 校验，并保留 producer case 血缘。同名多值被视为歧义，不可供诊断动作引用；模型不能自行提供替代值。
 - `PlannedAction.origin` 区分初始计划与 Analyzer 追加的诊断动作。普通 `passed/blocked` 仍继续队列；诊断 case/workflow 无论结果为 `passed`、`failed`、`error` 还是 `blocked`，都在执行后回到 `analyzing`，使模型能使用新 HTTP Observation 确认或推翻假设；硬预算不足时仍由代码终止。
+- Analyzer 的模型调用边界具有确定性失败回退：超时、网络错误、响应损坏或一次结构修复后仍无法通过 Pydantic 时，运行不崩溃；代码消耗一个 Agent step，有待执行队列则 `continue_plan`，否则结束。审计记录保留 `proposed=null`、实际 fallback 和异常类型，不持久化可能包含模型输出或供应商细节的原始异常文本。
 - 修复后的真实缺陷运行生成 15 个 Observation 和 3 次 Analyzer 决策，完整生成 checkpoint、trajectory、run、report 和 pipeline 产物。三次均选择 `continue_plan`，因为重复邮箱被接受和未知用户返回 `200 {}` 已是直接契约证据；该运行验证了分析回路和正常终止，但没有实际选择新诊断 action，不用它声称 Working Memory 注入的真实模型成功率。
 
 ### M3：可交付性

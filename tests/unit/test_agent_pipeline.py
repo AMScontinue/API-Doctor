@@ -21,9 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PipelineGateway:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_analyzer: bool = False) -> None:
         self.calls: list[str] = []
         self.analysis_calls = 0
+        self.fail_analyzer = fail_analyzer
 
     def complete(self, prompt, *, response_model, trace_label):
         self.calls.append(trace_label)
@@ -73,6 +74,8 @@ class PipelineGateway:
             )
         elif response_model is AnalysisDecision:
             self.analysis_calls += 1
+            if self.fail_analyzer:
+                raise TimeoutError("provider timeout with unsafe detail")
             payload = (
                 {
                     "decision": "add_diagnostic_case",
@@ -239,3 +242,72 @@ def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkey
     assert result.run.state.plan_version == 2
     assert result.run.state.phase == "finished"
     assert result.model_usage["analyzer"].calls == 2
+
+
+def test_pipeline_falls_back_when_analyzer_call_fails(monkeypatch):
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    gateway = PipelineGateway(fail_analyzer=True)
+    runtime_calls = 0
+
+    def fake_run(state, plan, workflows, actual_catalog, config, *, checkpoint=None):
+        nonlocal runtime_calls
+        del plan, workflows, config, checkpoint
+        runtime_calls += 1
+        assert actual_catalog is catalog
+        if runtime_calls == 1:
+            action = state.pending_actions[0]
+            pending = action.model_copy(update={"item_id": "remaining-case"})
+            observation = AgentObservation(
+                action_kind=action.kind,
+                action_id=action.item_id,
+                outcome="failed",
+                evidence_ref="trajectory:actions/1",
+                summary="trigger analyzer",
+                request_count=1,
+            )
+            return AgentRun(
+                state=state.model_copy(
+                    deep=True,
+                    update={
+                        "phase": "analyzing",
+                        "pending_actions": [pending],
+                        "completed_actions": [action],
+                        "observations": [observation],
+                        "remaining_test_budget": state.remaining_test_budget - 1,
+                        "remaining_step_budget": state.remaining_step_budget - 1,
+                    },
+                ),
+                records=[AgentActionRecord(action=action, observation=observation)],
+            )
+        assert state.phase == "executing"
+        assert state.pending_actions[0].item_id == "remaining-case"
+        return AgentRun(
+            state=state.model_copy(
+                deep=True,
+                update={
+                    "phase": "finished",
+                    "pending_actions": [],
+                    "termination_reason": "fallback plan completed",
+                },
+            )
+        )
+
+    monkeypatch.setattr("api_doctor.agent.pipeline.run_agent_actions", fake_run)
+    result = AgentPipeline(gateway).run(
+        catalog,
+        [],
+        RunConfig(
+            base_url="http://localhost:8080",
+            seed=7,
+            time_anchor=datetime.fromisoformat("2026-10-02T10:00:00+00:00"),
+            max_tests=3,
+        ),
+        max_steps=5,
+    )
+
+    assert runtime_calls == 2
+    assert result.run.state.termination_reason == "fallback plan completed"
+    assert result.run.analyses[0].proposed is None
+    assert result.run.analyses[0].applied_decision == "continue_plan"
+    assert result.run.analyses[0].analyzer_error == "Analyzer unavailable (TimeoutError)"
+    assert result.model_usage["analyzer"].calls == 0

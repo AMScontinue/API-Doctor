@@ -140,6 +140,9 @@ def _run_pipeline(args: argparse.Namespace, catalog: OperationCatalog) -> None:
             "test_plan": result.test_plan.summary(),
             "compiled_workflows": len(result.workflows),
             "observations": len(result.run.state.observations),
+            "analyzer_failures": sum(
+                item.analyzer_error is not None for item in result.run.analyses
+            ),
             "termination_reason": result.run.state.termination_reason,
             "model_usage": {
                 name: asdict(usage) for name, usage in result.model_usage.items()
