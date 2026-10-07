@@ -9,6 +9,7 @@ from pydantic import Field
 
 from api_doctor.generation.workflow_models import WorkflowCandidate
 from api_doctor.openapi.models import Operation, OperationCatalog, Parameter
+from api_doctor.openapi.schema_validation import schema_errors
 from api_doctor.testspec.models import StrictModel
 
 
@@ -27,6 +28,7 @@ class CompiledBinding(StrictModel):
     location: Literal["path", "query", "header", "cookie", "body"]
     name: str
     variable: str
+    source: Literal["workflow", "working_memory"] = "workflow"
     target_schema: dict[str, Any]
 
 
@@ -233,7 +235,7 @@ def _parameter(operation: Operation, location: str, name: str) -> Parameter | No
     )
 
 
-def _binding_target(
+def binding_target_schema(
     operation: Operation,
     location: str,
     name: str,
@@ -249,6 +251,7 @@ def _binding_target(
 def _compile_workflow(
     workflow: WorkflowCandidate,
     catalog: OperationCatalog,
+    working_memory: dict[str, object],
 ) -> tuple[CompiledWorkflow | None, list[str]]:
     errors: list[str] = []
     variables: dict[str, list[ExtractionSchema]] = {}
@@ -315,7 +318,7 @@ def _compile_workflow(
                 errors.append(f"step {step.step_id!r} binds {target!r} more than once")
                 continue
             bound_targets.add(target)
-            target_schema = _binding_target(operation, *target)
+            target_schema = binding_target_schema(operation, *target)
             if target_schema is None:
                 if binding.location == "body":
                     description = f"request body field {binding.name!r}"
@@ -323,26 +326,44 @@ def _compile_workflow(
                     description = f"{binding.location} parameter {binding.name!r}"
                 errors.append(f"step {step.step_id!r} references unknown {description}")
                 continue
-            source_schemas = variables.get(binding.variable, [])
-            if not source_schemas:
-                errors.append(
-                    f"step {step.step_id!r} variable {binding.variable!r} has no valid extraction"
-                )
-                continue
-            if not all(
-                _types_compatible(source.json_schema, target_schema)
-                for source in source_schemas
-            ):
-                errors.append(
-                    f"step {step.step_id!r} variable {binding.variable!r} is not type-compatible "
-                    f"with {binding.location} parameter {binding.name!r}"
-                )
-                continue
+            if binding.source == "working_memory":
+                if binding.variable not in working_memory:
+                    errors.append(
+                        f"step {step.step_id!r} references unavailable working-memory "
+                        f"variable {binding.variable!r}"
+                    )
+                    continue
+                value_errors = schema_errors(target_schema, working_memory[binding.variable])
+                if value_errors:
+                    errors.append(
+                        f"step {step.step_id!r} working-memory variable "
+                        f"{binding.variable!r} violates target schema: "
+                        f"{value_errors[0].message}"
+                    )
+                    continue
+            else:
+                source_schemas = variables.get(binding.variable, [])
+                if not source_schemas:
+                    errors.append(
+                        f"step {step.step_id!r} variable {binding.variable!r} "
+                        "has no valid extraction"
+                    )
+                    continue
+                if not all(
+                    _types_compatible(source.json_schema, target_schema)
+                    for source in source_schemas
+                ):
+                    errors.append(
+                        f"step {step.step_id!r} variable {binding.variable!r} is not "
+                        f"type-compatible with {binding.location} parameter {binding.name!r}"
+                    )
+                    continue
             bindings.append(
                 CompiledBinding(
                     location=binding.location,
                     name=binding.name,
                     variable=binding.variable,
+                    source=binding.source,
                     target_schema=target_schema,
                 )
             )
@@ -378,12 +399,14 @@ def _compile_workflow(
 def validate_workflows(
     workflows: list[WorkflowCandidate],
     catalog: OperationCatalog,
+    *,
+    working_memory: dict[str, object] | None = None,
 ) -> WorkflowValidationResult:
     """Review each workflow independently; proposals never bypass catalog checks."""
     reviews: list[WorkflowReview] = []
     id_counts = Counter(workflow.workflow_id for workflow in workflows)
     for workflow in workflows:
-        compiled, errors = _compile_workflow(workflow, catalog)
+        compiled, errors = _compile_workflow(workflow, catalog, working_memory or {})
         if id_counts[workflow.workflow_id] > 1:
             errors.insert(0, f"duplicate workflow_id {workflow.workflow_id!r}")
             compiled = None

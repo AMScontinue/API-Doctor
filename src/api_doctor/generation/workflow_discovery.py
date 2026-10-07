@@ -68,6 +68,7 @@ def build_workflow_prompt(
             "Use only operation_id values present in the catalog.",
             "Extract variables only from declared response body fields.",
             "Bind variables only to declared operation parameters or to one declared top-level request-body field with location=body.",
+            "Initial workflows may only bind variables extracted by an earlier step; use source=workflow.",
             "A variable must be extracted by an earlier step before it is bound.",
             "Prefer lifecycle workflows such as create-then-read over unrelated operations.",
             "Set expected_status_codes only to exact responses declared by that operation.",

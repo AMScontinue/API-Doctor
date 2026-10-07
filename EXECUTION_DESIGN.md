@@ -1390,13 +1390,18 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 - 每个 action 后通过回调原子覆盖 `checkpoint.json` 并追加脱敏 `trajectory.jsonl`；最终 `run.json` 保留具体请求/响应执行记录，Markdown 报告使用事实模板生成；
 - 单元测试覆盖混合队列、workflow 变量合并、预算扣减、失败暂停、重复指纹、篡改成本、预算不足、checkpoint 和 artifact；不调用 LLM，也不伪造 planner 成功率；
 - 一次真实本地运行消费保存的 DeepSeek 初始计划：执行 1 个两步 `order_create_read` workflow 与 6 个单接口用例，共 7 个 action、8 个 HTTP 请求，8/8 passed，记录 8 个请求指纹和 `order_id=1` 血缘；request budget 从 8 降至 0，Agent step budget 在扣除首次规划与 8 次工具步骤后剩余 1，最终因 pending queue 为空结束；
-- 当前已经接通“LLM initial plan → validated AgentState → 真实混合工具执行 → Observation/Working Memory/checkpoint”。尚缺失败 Observation 的 LLM Analyzer、诊断 action 校验和 `plan_version` 驱动的局部 replan。
+- 这一阶段首先接通了“LLM initial plan → validated AgentState → 真实混合工具执行 → Observation/Working Memory/checkpoint”，随后在同一 Pipeline 中补上了失败 Observation 的 Analyzer 与最小诊断 action 插入。
 - `api-doctor agent-run` 通过应用层 `AgentPipeline` 串联语义发现、确定性候选编译与融合、workflow 发现与校验、初始规划和 action 执行；阶段产物以类型化对象在内存中传递，文件仅承担审计、报告和后续恢复，不作为正常主流程的阶段间通信机制。
 - 测试计划构建集中在独立的确定性 `build_final_test_plan` 服务中，CLI 不再复制机械候选编译、语义候选校验和融合逻辑。阶段子命令继续保留为开发、检查和复现实验的接口。
 - Pipeline 与文件持久化解耦，只接收可选 checkpoint 回调并返回完整类型化结果。CLI 负责将脱敏的语义发现、最终测试计划、workflow 发现与校验、初始规划及分阶段模型用量保存到 `pipeline.json`；已包含文件的运行目录会被拒绝，不能静默覆盖历史轨迹。
 - 未获得 DELETE 批准时，`requires_approval` 的单测试和 workflow 都不能进入 LLM Planner inventory、可信 inventory 或确定性 fallback；运行时安全策略继续作为最后一道独立防线。
 - Workflow step 现可选声明 `expected_status_codes`，校验器只接受当前 operation 在 OpenAPI 中精确声明的状态；需要从响应提取变量的 step 仍必须使用具有对应响应 Schema 的成功状态。
 - `repeat=once` 只能用于当前 workflow 内已发送过的相同请求指纹，每个指纹最多追加一次；外部 action 指纹、第三次相同请求和未显式标记的重复仍由确定性运行时阻止。
+- 失败 Analyzer 已接入统一 Pipeline：运行时遇到 `failed/error` Observation 后暂停，DeepSeek 只能在 `continue_plan`、`add_diagnostic_case`、`add_diagnostic_workflow`、`finish` 中选择。单请求诊断使用 `DiagnosticCaseProposal`，只有 2–4 步且存在依赖的诊断才使用 Workflow DSL。
+- Analyzer 提议不能直接执行；诊断 case 会经 OpenAPI operation、参数/字段、Working Memory 变量、Schema、状态码、重复指纹、DELETE 审批和预算校验后编译为普通 `CompiledTestCase`；诊断 workflow 继续走原有确定性校验器。合法诊断插入队首并增加 `plan_version`，非法提议记录原因后回退原计划。
+- Analyzer 每轮消耗一个 Agent step，决策、假设、校验错误和新 action 写入 `checkpoint.json`、`trajectory.jsonl`、`run.json` 和 Markdown 报告。当前实现“追加一个诊断 case 或 workflow”的最小局部调整，尚未实现取消/替换多个 pending action 或全量 replan。
+- `ParameterBinding.source=working_memory` 可引用本次 Agent run 中已验证的变量；宿主以变量名查找实际值，在编译和执行前均按目标 Schema 校验，并保留 producer case 血缘。同名多值被视为歧义，不可供诊断动作引用；模型不能自行提供替代值。
+- 修复后的真实缺陷运行生成 15 个 Observation 和 3 次 Analyzer 决策，完整生成 checkpoint、trajectory、run、report 和 pipeline 产物。三次均选择 `continue_plan`，因为重复邮箱被接受和未知用户返回 `200 {}` 已是直接契约证据；该运行验证了分析回路和正常终止，但没有实际选择新诊断 action，不用它声称 Working Memory 注入的真实模型成功率。
 
 ### M3：可交付性
 

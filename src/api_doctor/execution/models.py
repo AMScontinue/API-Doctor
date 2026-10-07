@@ -83,6 +83,14 @@ class WorkflowVariable(RunModel):
     response_status: int
 
 
+class WorkflowInputVariable(RunModel):
+    name: str
+    value: object
+    producer_operation_id: str
+    producer_case_id: str
+    response_expression: str
+
+
 class WorkflowStepRecord(RunModel):
     step: CompiledWorkflowStep
     state: Literal["executed", "blocked", "compile_error"]

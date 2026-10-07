@@ -10,6 +10,7 @@ from api_doctor.execution.models import (
     RunConfig,
     WorkflowRun,
     WorkflowRunMetrics,
+    WorkflowInputVariable,
     WorkflowStepRecord,
     WorkflowVariable,
 )
@@ -44,6 +45,7 @@ class _WorkflowRunner:
         catalog: OperationCatalog,
         config: RunConfig,
         seen_fingerprints: set[str] | None = None,
+        input_variables: list[WorkflowInputVariable] | None = None,
     ) -> None:
         self.workflow = workflow
         self.catalog = catalog
@@ -54,6 +56,7 @@ class _WorkflowRunner:
             timeout_seconds=config.timeout_seconds,
         )
         self.variables: dict[str, WorkflowVariable] = {}
+        self.input_variables = {item.name: item for item in input_variables or []}
         self.records: list[WorkflowStepRecord] = []
         self.halt_reason: str | None = None
         self.seen_fingerprints = set(seen_fingerprints or ())
@@ -192,7 +195,11 @@ class _WorkflowRunner:
         body_overrides: dict[str, object] = {}
         dependencies: set[str] = set()
         for binding in bindings:
-            variable = self.variables.get(binding.variable)
+            variable = (
+                self.input_variables.get(binding.variable)
+                if binding.source == "working_memory"
+                else self.variables.get(binding.variable)
+            )
             if variable is None:
                 raise WorkflowRuntimeError(f"variable {binding.variable!r} is unavailable")
             errors = schema_errors(binding.target_schema, variable.value)
@@ -277,10 +284,12 @@ def run_workflow(
     config: RunConfig,
     *,
     seen_fingerprints: set[str] | None = None,
+    input_variables: list[WorkflowInputVariable] | None = None,
 ) -> WorkflowRun:
     return _WorkflowRunner(
         workflow,
         catalog,
         config,
         seen_fingerprints=seen_fingerprints,
+        input_variables=input_variables,
     ).run()

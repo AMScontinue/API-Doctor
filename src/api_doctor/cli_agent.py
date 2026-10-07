@@ -130,6 +130,7 @@ def _run_pipeline(args: argparse.Namespace, catalog: OperationCatalog) -> None:
         run_config(args),
         max_steps=args.max_steps,
         checkpoint=store.checkpoint,
+        analysis_checkpoint=store.checkpoint_analysis,
     )
     artifacts = store.finalize_pipeline(result)
     write_json(

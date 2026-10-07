@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from api_doctor.generation.workflow_models import WorkflowCandidate
 from api_doctor.openapi import load_openapi
 from api_doctor.workflows.validation import validate_workflows
@@ -198,3 +200,47 @@ def test_rejects_duplicate_workflow_ids():
 
     assert result.summary()["rejected"] == 2
     assert all("duplicate workflow_id" in review.errors[0] for review in result.reviews)
+
+
+def test_workflow_candidate_rejects_single_step():
+    payload = _workflow().model_dump(mode="json")
+    payload["steps"] = payload["steps"][:1]
+
+    with pytest.raises(ValueError, match="at least 2 items"):
+        WorkflowCandidate.model_validate(payload)
+
+
+def test_rejects_missing_or_schema_invalid_working_memory_variable():
+    payload = _workflow().model_dump(mode="json")
+    read_step = {
+        "step_id": "read",
+        "operation_id": "getOrder",
+        "purpose": "read an existing order",
+        "expected_status_codes": [200],
+        "bind": [
+            {
+                "location": "path",
+                "name": "id",
+                "variable": "order_id",
+                "source": "working_memory",
+            }
+        ],
+    }
+    payload["steps"] = [
+        read_step,
+        {
+            **read_step,
+            "step_id": "read-again",
+            "repeat": "once",
+        },
+    ]
+    candidate = WorkflowCandidate.model_validate(payload)
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+
+    missing = validate_workflows([candidate], catalog).reviews[0]
+    invalid = validate_workflows(
+        [candidate], catalog, working_memory={"order_id": "not-an-integer"}
+    ).reviews[0]
+
+    assert "unavailable working-memory variable" in missing.errors[0]
+    assert "violates target schema" in invalid.errors[0]

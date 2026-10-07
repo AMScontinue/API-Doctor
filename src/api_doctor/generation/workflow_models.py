@@ -20,6 +20,7 @@ class ParameterBinding(WorkflowModel):
     location: Literal["path", "query", "header", "cookie", "body"]
     name: str
     variable: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    source: Literal["workflow", "working_memory"] = "workflow"
 
 
 class WorkflowStep(WorkflowModel):
@@ -49,7 +50,7 @@ class WorkflowCandidate(WorkflowModel):
                 raise ValueError(f"duplicate step_id {step.step_id!r}")
             step_ids.add(step.step_id)
             for binding in step.bind:
-                if binding.variable not in available:
+                if binding.source == "workflow" and binding.variable not in available:
                     raise ValueError(
                         f"variable {binding.variable!r} is used before it is extracted"
                     )

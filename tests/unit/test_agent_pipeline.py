@@ -1,7 +1,13 @@
 from datetime import datetime
 from pathlib import Path
 
-from api_doctor.agent.models import AgentRun, InitialPlanProposal
+from api_doctor.agent.models import (
+    AnalysisDecision,
+    AgentActionRecord,
+    AgentObservation,
+    AgentRun,
+    InitialPlanProposal,
+)
 from api_doctor.agent.persistence import AgentArtifactStore
 from api_doctor.agent.pipeline import AgentPipeline
 from api_doctor.execution.models import RunConfig
@@ -64,6 +70,24 @@ class PipelineGateway:
                     ],
                 }
             )
+        elif response_model is AnalysisDecision:
+            value = AnalysisDecision.model_validate(
+                {
+                    "decision": "add_diagnostic_case",
+                    "reason": "probe one declared not-found response",
+                    "hypothesis": {
+                        "statement": "unknown resources may not map to 404",
+                        "confidence": "medium",
+                        "supporting_evidence": ["trajectory:actions/1"],
+                    },
+                    "diagnostic_case": {
+                        "case_id": "unknown_user_probe",
+                        "operation_id": "getUser",
+                        "purpose": "probe the not-found branch once",
+                        "expected_status_codes": [404],
+                    },
+                }
+            )
         else:
             raise AssertionError(f"unexpected response model: {response_model}")
         return ModelResponse(
@@ -104,7 +128,7 @@ def test_pipeline_passes_in_memory_state_directly_to_runtime(monkeypatch, tmp_pa
         "initial-planner",
     ]
     assert captured["state"] is result.planning.state
-    assert captured["plan"] is result.test_plan
+    assert captured["plan"] == result.test_plan
     assert result.run.state.phase == "finished"
     assert result.model_usage["total"].calls == 3
     assert result.workflow_validation.summary()["rejected"] == 1
@@ -112,3 +136,76 @@ def test_pipeline_passes_in_memory_state_directly_to_runtime(monkeypatch, tmp_pa
     pipeline = artifacts["pipeline"].read_text(encoding="utf-8")
     assert '"workflow_validation"' in pipeline
     assert '"initial_planner"' in pipeline
+
+
+def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkeypatch):
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    gateway = PipelineGateway()
+    calls = 0
+
+    def fake_run(state, plan, workflows, actual_catalog, config, *, checkpoint=None):
+        nonlocal calls
+        del config, checkpoint
+        calls += 1
+        assert actual_catalog is catalog
+        if calls == 1:
+            action = state.pending_actions[0]
+            observation = AgentObservation(
+                action_kind=action.kind,
+                action_id=action.item_id,
+                outcome="failed",
+                evidence_ref="trajectory:actions/1",
+                summary="unexpected success response",
+                request_count=1,
+                violations=["status 201 is not expected"],
+            )
+            failed_state = state.model_copy(
+                deep=True,
+                update={
+                    "phase": "analyzing",
+                    "pending_actions": [],
+                    "completed_actions": [action],
+                    "observations": [observation],
+                    "remaining_test_budget": state.remaining_test_budget - 1,
+                    "remaining_step_budget": state.remaining_step_budget - 1,
+                },
+            )
+            return AgentRun(
+                state=failed_state,
+                records=[AgentActionRecord(action=action, observation=observation)],
+            )
+
+        assert state.pending_actions[0].item_id == "DIAG-unknown_user_probe"
+        assert any(
+            item.case.case_id == "DIAG-unknown_user_probe" for item in plan.cases
+        )
+        assert all(item.workflow_id != "unknown_user_probe" for item in workflows)
+        return AgentRun(
+            state=state.model_copy(
+                deep=True,
+                update={
+                    "phase": "finished",
+                    "pending_actions": [],
+                    "termination_reason": "diagnostic complete",
+                },
+            )
+        )
+
+    monkeypatch.setattr("api_doctor.agent.pipeline.run_agent_actions", fake_run)
+    result = AgentPipeline(gateway).run(
+        catalog,
+        [],
+        RunConfig(
+            base_url="http://localhost:8080",
+            seed=7,
+            time_anchor=datetime.fromisoformat("2026-10-02T10:00:00+00:00"),
+            max_tests=4,
+        ),
+        max_steps=6,
+    )
+
+    assert calls == 2
+    assert gateway.calls[-1] == "failure-analyzer"
+    assert result.run.analyses[0].applied_decision == "add_diagnostic_case"
+    assert result.run.state.plan_version == 2
+    assert result.model_usage["failure_analyzer"].calls == 1

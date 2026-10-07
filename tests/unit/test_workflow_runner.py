@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from api_doctor.execution.models import RunConfig
+from api_doctor.execution.models import RunConfig, WorkflowInputVariable
 from api_doctor.execution.safety import SafetyViolation
 from api_doctor.execution.workflow_runner import run_workflow
 from api_doctor.generation.workflow_models import WorkflowCandidate
@@ -221,6 +221,77 @@ def test_injects_response_variable_into_request_body(monkeypatch):
     assert run.metrics.passed == 2
     assert observed_product_ids == [42]
     assert run.records[1].compiled_case.dependencies == ["WF-user_to_order-create-user"]
+
+
+def test_injects_working_memory_variable_into_multistep_diagnostic(monkeypatch):
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    candidate = WorkflowCandidate.model_validate(
+        {
+            "workflow_id": "diagnose_order_status",
+            "purpose": "read an order already stored in working memory",
+            "confidence": "high",
+            "reasoning": "one GET reveals the current state",
+            "steps": [
+                {
+                    "step_id": "read",
+                    "operation_id": "getOrder",
+                    "purpose": "read current order state",
+                    "expected_status_codes": [200],
+                    "bind": [
+                        {
+                            "location": "path",
+                            "name": "id",
+                            "variable": "order_id",
+                            "source": "working_memory",
+                        }
+                    ],
+                },
+                {
+                    "step_id": "read-again",
+                    "operation_id": "getOrder",
+                    "purpose": "confirm the observed state",
+                    "expected_status_codes": [200],
+                    "repeat": "once",
+                    "bind": [
+                        {
+                            "location": "path",
+                            "name": "id",
+                            "variable": "order_id",
+                            "source": "working_memory",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    memory = WorkflowInputVariable(
+        name="order_id",
+        value=42,
+        producer_operation_id="createOrder",
+        producer_case_id="WF-create-order",
+        response_expression="$response.body#/id",
+    )
+    workflow = validate_workflows(
+        [candidate], catalog, working_memory={"order_id": 42}
+    ).compiled_workflows()[0]
+    observed = []
+
+    def fake_execute(case, policy, operation=None):
+        del policy, operation
+        observed.append(case.request.path_parameters["id"])
+        return _passed(case, 200, {"id": 42, "status": "created"})
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_workflow(
+        workflow,
+        catalog,
+        _config(max_tests=2),
+        input_variables=[memory],
+    )
+
+    assert observed == [42, 42]
+    assert run.metrics.passed == 2
+    assert run.records[0].compiled_case.dependencies == ["WF-create-order"]
 
 
 def test_allows_one_evidence_backed_repeat_within_workflow(monkeypatch):

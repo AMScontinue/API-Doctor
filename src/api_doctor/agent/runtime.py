@@ -14,7 +14,7 @@ from api_doctor.agent.models import (
     PlannedAction,
 )
 from api_doctor.execution.http import execute_case
-from api_doctor.execution.models import RunConfig, WorkflowRun
+from api_doctor.execution.models import RunConfig, WorkflowInputVariable, WorkflowRun
 from api_doctor.execution.safety import ExecutionPolicy
 from api_doctor.execution.workflow_runner import run_workflow
 from api_doctor.openapi.models import OperationCatalog
@@ -54,6 +54,7 @@ class _AgentRunner:
             approve_delete=config.approve_delete and state.delete_approved,
             timeout_seconds=config.timeout_seconds,
         )
+        self.action_offset = len(state.observations)
 
     def run(self) -> AgentRun:
         while self.state.phase == "executing":
@@ -65,13 +66,13 @@ class _AgentRunner:
             if trusted_cost is None:
                 record = self._registry_error(
                     action,
-                    len(self.records) + 1,
+                    self.action_offset + len(self.records) + 1,
                     "trusted action registry mismatch",
                 )
             elif action.estimated_requests != trusted_cost:
                 record = self._registry_error(
                     action,
-                    len(self.records) + 1,
+                    self.action_offset + len(self.records) + 1,
                     "action request cost does not match trusted registry",
                 )
             elif trusted_cost > self.state.remaining_test_budget:
@@ -81,7 +82,9 @@ class _AgentRunner:
                 self._finish("remaining agent step budget cannot execute the next action")
                 break
             else:
-                record = self._execute(action, len(self.records) + 1)
+                record = self._execute(
+                    action, self.action_offset + len(self.records) + 1
+                )
             self.state.pending_actions.pop(0)
             self.state.completed_actions.append(action)
             self.state.observations.append(record.observation)
@@ -191,6 +194,7 @@ class _AgentRunner:
         action_number: int,
         workflow: CompiledWorkflow,
     ) -> AgentActionRecord:
+        working_variables = self.state.unambiguous_variables()
         run = run_workflow(
             workflow,
             self.catalog,
@@ -203,6 +207,16 @@ class _AgentRunner:
                 timeout_seconds=self.config.timeout_seconds,
             ),
             seen_fingerprints=self.state.executed_fingerprints,
+            input_variables=[
+                WorkflowInputVariable(
+                    name=variable.name,
+                    value=variable.value,
+                    producer_operation_id=variable.producer_operation_id,
+                    producer_case_id=variable.producer_case_id,
+                    response_expression=variable.response_expression,
+                )
+                for variable in working_variables.values()
+            ],
         )
         results = [record.result for record in run.records if record.result is not None]
         request_count = sum(result.request_url is not None for result in results)
