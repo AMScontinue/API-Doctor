@@ -1,0 +1,60 @@
+{
+  "run_id": "7b3ad691-f349-4a45-b4d5-7d266f210786",
+  "scenario": "backend-unavailable",
+  "base_url": "http://127.0.0.1:18080",
+  "precondition": "no process was listening on the configured base URL",
+  "budgets": {
+    "max_tests": 8,
+    "max_steps": 14,
+    "remaining_tests": 5,
+    "remaining_steps": 7
+  },
+  "initial_planner": {
+    "used_fallback": true,
+    "validation_errors": [
+      "selected request cost exceeds max_tests"
+    ]
+  },
+  "execution": {
+    "observations": 3,
+    "errors": 3,
+    "analyzer_calls": 3,
+    "analyzer_failures": 0,
+    "diagnostic_actions_executed": 1,
+    "pending_actions_retained": 1,
+    "plan_version": 2,
+    "termination_decision": "finish_run"
+  },
+  "analyzer_decisions": [
+    {
+      "proposed": "add_diagnostic_case",
+      "applied": "continue_plan",
+      "validation_error": "diagnostic case duplicates an executed request"
+    },
+    {
+      "proposed": "add_diagnostic_case",
+      "applied": "add_diagnostic_case"
+    },
+    {
+      "proposed": "finish_run",
+      "applied": "finish_run"
+    }
+  ],
+  "final_hypothesis": {
+    "hypothesis_id": "server_unreachable",
+    "status": "confirmed",
+    "confidence": "high",
+    "evidence_refs": [
+      "trajectory:actions/1",
+      "trajectory:actions/2",
+      "trajectory:actions/3"
+    ]
+  },
+  "verified_capabilities": [
+    "transport errors distinguished from API responses",
+    "invalid Analyzer proposal rejected transactionally",
+    "bounded reachability diagnostic",
+    "high-confidence evidence-linked hypothesis update",
+    "guarded finish_run with pending work retained"
+  ]
+}

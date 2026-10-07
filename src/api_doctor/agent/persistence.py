@@ -180,13 +180,24 @@ def render_agent_report(run: AgentRun) -> str:
             lines.append(f"- Reason: {proposed.reason}")
         if analysis.analyzer_error is not None:
             lines.append(f"- Analyzer error: {analysis.analyzer_error}")
-        if proposed is not None and proposed.hypothesis is not None:
-            lines.append(f"- Hypothesis: {proposed.hypothesis.statement}")
+        if proposed is not None and proposed.new_hypothesis is not None:
+            hypothesis = proposed.new_hypothesis
+            lines.append(
+                f"- New hypothesis: `{hypothesis.hypothesis_id}` {hypothesis.statement}"
+            )
+        if proposed is not None and proposed.hypothesis_update is not None:
+            update = proposed.hypothesis_update
+            lines.append(
+                f"- Hypothesis update: `{update.hypothesis_id}` → `{update.status}` "
+                f"({update.confidence})"
+            )
         if analysis.added_action is not None:
             lines.append(
                 f"- Added action: `{analysis.added_action.kind}:"
                 f"{analysis.added_action.item_id}`"
             )
+        for action in analysis.removed_actions:
+            lines.append(f"- Removed pending action: `{action.kind}:{action.item_id}`")
         lines.extend(f"- Rejected by validator: {item}" for item in analysis.validation_errors)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

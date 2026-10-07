@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+
 from api_doctor.agent.models import AgentVariable, DiagnosticCaseProposal
 from api_doctor.openapi.models import OperationCatalog
 from api_doctor.openapi.schema_validation import schema_errors
@@ -74,6 +75,29 @@ def compile_diagnostic_case(
         else:
             parameter_overrides[target] = variable.value
         dependencies.add(variable.producer_case_id)
+
+    for assignment in proposal.assignments:
+        target = (assignment.location, assignment.name)
+        if target in targets:
+            raise DiagnosticCompileError(
+                f"diagnostic assigns or binds {target!r} more than once"
+            )
+        targets.add(target)
+        schema = binding_target_schema(operation, *target)
+        if schema is None:
+            raise DiagnosticCompileError(
+                f"unknown {assignment.location} diagnostic target {assignment.name!r}"
+            )
+        errors = schema_errors(schema, assignment.value)
+        if errors:
+            raise DiagnosticCompileError(
+                f"diagnostic constant for {target!r} violates target schema: "
+                f"{errors[0].message}"
+            )
+        if assignment.location == "body":
+            body_overrides[assignment.name] = assignment.value
+        else:
+            parameter_overrides[target] = assignment.value
 
     candidate = SemanticTestCandidate(
         rule_id=f"diagnostic:{proposal.case_id}",

@@ -7,6 +7,7 @@ from typing import Any
 
 
 SENSITIVE_PARTS = ("authorization", "cookie", "api_key", "apikey", "password", "secret", "token")
+SAFE_METRIC_KEYS = {"prompt_tokens", "completion_tokens"}
 
 
 def redact(value: Any) -> Any:
@@ -15,7 +16,11 @@ def redact(value: Any) -> Any:
         redact_value = any(part in path for part in SENSITIVE_PARTS)
         return {
             key: "***REDACTED***"
-            if any(part in key.lower() for part in SENSITIVE_PARTS) or (key == "value" and redact_value)
+            if (
+                key.lower() not in SAFE_METRIC_KEYS
+                and any(part in key.lower() for part in SENSITIVE_PARTS)
+            )
+            or (key == "value" and redact_value)
             else redact(item)
             for key, item in value.items()
         }

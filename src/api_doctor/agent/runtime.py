@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from hashlib import sha256
 from typing import Literal
 
 from api_doctor.agent.models import (
@@ -143,14 +144,21 @@ class _AgentRunner:
         case = planned.case.model_copy(deep=True)
         fingerprint = planned.request_fingerprint
         if fingerprint in self.state.executed_fingerprints:
-            result = TestResult(
-                case_id=case.case_id,
-                outcome="blocked",
-                actual_status=None,
-                expected_statuses=case.assertions[0].allowed,
-                error="duplicate request fingerprint",
+            repeat_allowed = (
+                action.origin == "diagnostic"
+                and action.allow_repeat
+                and fingerprint not in self.state.repeated_fingerprints
             )
-            return self._case_record(action, action_number, case, result, [])
+            if not repeat_allowed:
+                result = TestResult(
+                    case_id=case.case_id,
+                    outcome="blocked",
+                    actual_status=None,
+                    expected_statuses=case.assertions[0].allowed,
+                    error="duplicate request fingerprint",
+                )
+                return self._case_record(action, action_number, case, result, [])
+            self.state.repeated_fingerprints.add(fingerprint)
 
         result = execute_case(
             case,
@@ -202,22 +210,26 @@ class _AgentRunner:
             self.catalog,
             RunConfig(
                 base_url=self.config.base_url,
-                seed=self.config.seed,
+                seed=_action_seed(self.config.seed, action),
                 time_anchor=self.config.time_anchor,
                 max_tests=min(action.estimated_requests, self.state.remaining_test_budget),
                 approve_delete=self.config.approve_delete and self.state.delete_approved,
                 timeout_seconds=self.config.timeout_seconds,
             ),
-            seen_fingerprints=self.state.executed_fingerprints,
+            seen_fingerprints=(
+                self.state.executed_fingerprints
+                if action.origin == "diagnostic"
+                else None
+            ),
             input_variables=[
                 WorkflowInputVariable(
-                    name=variable.name,
+                    name=memory_key,
                     value=variable.value,
                     producer_operation_id=variable.producer_operation_id,
                     producer_case_id=variable.producer_case_id,
                     response_expression=variable.response_expression,
                 )
-                for variable in working_variables.values()
+                for memory_key, variable in working_variables.items()
             ],
         )
         results = [record.result for record in run.records if record.result is not None]
@@ -310,6 +322,12 @@ def _workflow_outcome(
     if run.metrics.blocked:
         return "blocked"
     return "passed"
+
+
+def _action_seed(base_seed: int, action: PlannedAction) -> int:
+    """Derive reproducible, distinct generated data for independent actions."""
+    identity = f"{base_seed}:{action.kind}:{action.item_id}".encode()
+    return int.from_bytes(sha256(identity).digest()[:8], "big")
 
 
 def run_agent_actions(

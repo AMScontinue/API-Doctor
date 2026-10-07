@@ -1,0 +1,62 @@
+{
+  "run_id": "767bcc98-dd82-4dab-ad6b-061da5fdfd58",
+  "scenario": "confirm-conflict",
+  "service": "examples/buggy-shop",
+  "spec_fingerprint": "6df6f5ffbcf644de8bdc30f754ed0e91b4d4ebee1a621502cb457eb81f61184e",
+  "budgets": {
+    "max_tests": 20,
+    "max_steps": 30,
+    "remaining_tests": 1,
+    "remaining_steps": 5
+  },
+  "initial_planner": {
+    "used_fallback": true,
+    "validation_errors": [
+      "selected request cost exceeds max_tests"
+    ]
+  },
+  "execution": {
+    "observations": 14,
+    "passed": 11,
+    "failed": 2,
+    "blocked": 1,
+    "analyzer_calls": 4,
+    "analyzer_failures": 0,
+    "diagnostic_actions_executed": 2,
+    "plan_version": 3,
+    "termination_reason": "pending action queue exhausted"
+  },
+  "analyzer_decisions": [
+    "add_diagnostic_case",
+    "finish_investigation",
+    "add_diagnostic_case",
+    "finish_investigation"
+  ],
+  "hypotheses": [
+    {
+      "hypothesis_id": "confirm_409_due_to_order_state",
+      "status": "rejected",
+      "confidence": "high"
+    },
+    {
+      "hypothesis_id": "confirm_transition_broken",
+      "status": "confirmed",
+      "confidence": "high"
+    }
+  ],
+  "verified_capabilities": [
+    "real HTTP failure observation",
+    "stable evidence-linked hypotheses",
+    "namespaced working-memory lookup",
+    "validated diagnostic case insertion and execution",
+    "hypothesis rejection and confirmation",
+    "finish_investigation followed by resumed initial plan",
+    "checkpoint and trajectory persistence"
+  ],
+  "not_claimed_from_this_run": [
+    "revise_pending_actions selected by the model",
+    "finish_run selected by the model",
+    "single-request repeat=once selected by the model",
+    "initial planner success without fallback"
+  ]
+}

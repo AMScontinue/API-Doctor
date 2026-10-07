@@ -122,6 +122,10 @@ def test_log_redaction_handles_sensitive_keys_and_testspec_paths():
     assert redacted["Authorization"] == "***REDACTED***"
     assert redacted["mutation"]["value"] == "***REDACTED***"
     assert redacted["safe"] == "visible"
+    assert redact({"prompt_tokens": 100, "completion_tokens": 20}) == {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+    }
 
 
 def test_dotenv_loader_does_not_override_existing_environment(tmp_path, monkeypatch):

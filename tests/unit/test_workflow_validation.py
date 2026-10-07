@@ -195,6 +195,51 @@ def test_rejects_duplicate_bindings_to_same_parameter():
     assert "more than once" in review.errors[0]
 
 
+def test_compiles_schema_valid_constant_request_body_assignment():
+    steps = _workflow().model_dump(mode="json")["steps"][:2]
+    steps[1] = {
+        "step_id": "confirm-order",
+        "operation_id": "updateOrderStatus",
+        "purpose": "move the order to confirmed",
+        "bind": [
+            {"location": "path", "name": "id", "variable": "user_id"}
+        ],
+        "assign": [{"location": "body", "name": "status", "value": "confirmed"}],
+    }
+
+    review = _validate([_workflow(steps=steps)]).reviews[0]
+
+    assert review.verdict == "accepted"
+    assignment = review.compiled_workflow.steps[1].assign[0]
+    assert assignment.model_dump() == {
+        "location": "body",
+        "name": "status",
+        "value": "confirmed",
+    }
+
+
+def test_rejects_invalid_or_conflicting_constant_assignment():
+    steps = _workflow().model_dump(mode="json")["steps"][:2]
+    steps[1] = {
+        "step_id": "confirm-order",
+        "operation_id": "updateOrderStatus",
+        "purpose": "move the order to an invalid state",
+        "bind": [
+            {"location": "path", "name": "id", "variable": "user_id"}
+        ],
+        "assign": [
+            {"location": "path", "name": "id", "value": 1},
+            {"location": "body", "name": "status", "value": "invented"},
+        ],
+    }
+
+    review = _validate([_workflow(steps=steps)]).reviews[0]
+
+    assert review.verdict == "rejected"
+    assert any("assigns or binds" in error for error in review.errors)
+    assert any("violates target schema" in error for error in review.errors)
+
+
 def test_rejects_duplicate_workflow_ids():
     result = _validate([_workflow(), _workflow()])
 

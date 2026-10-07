@@ -32,6 +32,12 @@ class CompiledBinding(StrictModel):
     target_schema: dict[str, Any]
 
 
+class CompiledAssignment(StrictModel):
+    location: Literal["path", "query", "header", "cookie", "body"]
+    name: str
+    value: Any
+
+
 class CompiledWorkflowStep(StrictModel):
     step_id: str
     operation_id: str
@@ -41,6 +47,7 @@ class CompiledWorkflowStep(StrictModel):
     repeat: Literal["forbid", "once"] = "forbid"
     extract: list[CompiledExtraction] = Field(default_factory=list)
     bind: list[CompiledBinding] = Field(default_factory=list)
+    assign: list[CompiledAssignment] = Field(default_factory=list)
     requires_approval: bool = False
 
 
@@ -311,13 +318,13 @@ def _compile_workflow(
             )
 
         bindings: list[CompiledBinding] = []
-        bound_targets: set[tuple[str, str]] = set()
+        occupied_targets: set[tuple[str, str]] = set()
         for binding in step.bind:
             target = (binding.location, binding.name)
-            if target in bound_targets:
+            if target in occupied_targets:
                 errors.append(f"step {step.step_id!r} binds {target!r} more than once")
                 continue
-            bound_targets.add(target)
+            occupied_targets.add(target)
             target_schema = binding_target_schema(operation, *target)
             if target_schema is None:
                 if binding.location == "body":
@@ -368,6 +375,40 @@ def _compile_workflow(
                 )
             )
 
+        assignments: list[CompiledAssignment] = []
+        for assignment in step.assign:
+            target = (assignment.location, assignment.name)
+            if target in occupied_targets:
+                errors.append(
+                    f"step {step.step_id!r} assigns or binds {target!r} more than once"
+                )
+                continue
+            occupied_targets.add(target)
+            target_schema = binding_target_schema(operation, *target)
+            if target_schema is None:
+                if assignment.location == "body":
+                    description = f"request body field {assignment.name!r}"
+                else:
+                    description = (
+                        f"{assignment.location} parameter {assignment.name!r}"
+                    )
+                errors.append(f"step {step.step_id!r} references unknown {description}")
+                continue
+            value_errors = schema_errors(target_schema, assignment.value)
+            if value_errors:
+                errors.append(
+                    f"step {step.step_id!r} constant for {target!r} violates target "
+                    f"schema: {value_errors[0].message}"
+                )
+                continue
+            assignments.append(
+                CompiledAssignment(
+                    location=assignment.location,
+                    name=assignment.name,
+                    value=assignment.value,
+                )
+            )
+
         compiled_steps.append(
             CompiledWorkflowStep(
                 step_id=step.step_id,
@@ -378,6 +419,7 @@ def _compile_workflow(
                 repeat=step.repeat,
                 extract=extractions,
                 bind=bindings,
+                assign=assignments,
                 requires_approval=operation.method == "DELETE",
             )
         )

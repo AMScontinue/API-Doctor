@@ -1385,6 +1385,7 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 
 - `api-doctor run-agent-actions` 读取已校验 `AgentState`、`FinalTestPlan` 与 `CompiledWorkflow` registry，不新增 LLM 调用；运行前复核 OpenAPI fingerprint、action id、真实 workflow 成本、请求预算和 Agent step 预算，不能依赖 state 中可被篡改的估算；
 - 同一状态循环可以执行单接口 `CompiledTestCase` 和跨接口 `CompiledWorkflow`。每个真实 HTTP 请求消耗 request budget 与 Agent step budget；安全预检阻断和重复指纹不消耗 HTTP 预算，但仍作为一次 Agent 状态转换记录；
+- 每个 workflow action 从 run seed 与可信 action identity 派生稳定子 seed。不同的初始 workflow 是独立的测试夹具，其建数步骤不因另一 workflow 使用了相同 baseline 而被全局去重；同一 workflow 内仍阻止未声明的重复，并且 Analyzer 追加的诊断 workflow 仍检查本次 run 的全局历史指纹。单测试 action 继续使用全局去重。该边界允许多个生命周期各自创建资源，同时不允许模型借诊断路径任意重放请求；
 - action 完成后从 pending 移入 completed，并写入结构化 `AgentObservation`、实际请求数、step 数、violations、请求指纹和 workflow 变量血缘；单接口与 workflow 最终都经过既有 HTTP safety 和 response validation；
 - failed/error Observation 会把 phase 切换为 `analyzing` 并暂停剩余队列，作为下一阶段 Analyzer/Replanner 的真实输入；passed/blocked 在预算允许时继续，队列为空或硬预算不足由代码确定性结束；
 - 每个 action 后通过回调原子覆盖 `checkpoint.json` 并追加脱敏 `trajectory.jsonl`；最终 `run.json` 保留具体请求/响应执行记录，Markdown 报告使用事实模板生成；
@@ -1397,13 +1398,23 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 - 未获得 DELETE 批准时，`requires_approval` 的单测试和 workflow 都不能进入 LLM Planner inventory、可信 inventory 或确定性 fallback；运行时安全策略继续作为最后一道独立防线。
 - Workflow step 现可选声明 `expected_status_codes`，校验器只接受当前 operation 在 OpenAPI 中精确声明的状态；需要从响应提取变量的 step 仍必须使用具有对应响应 Schema 的成功状态。
 - `repeat=once` 只能用于当前 workflow 内已发送过的相同请求指纹，每个指纹最多追加一次；外部 action 指纹、第三次相同请求和未显式标记的重复仍由确定性运行时阻止。
-- 失败 Analyzer 已接入统一 Pipeline：运行时遇到 `failed/error` Observation 后暂停，DeepSeek 只能在 `continue_plan`、`add_diagnostic_case`、`add_diagnostic_workflow`、`finish` 中选择。单请求诊断使用 `DiagnosticCaseProposal`，只有 2–4 步且存在依赖的诊断才使用 Workflow DSL。
+- Workflow step 的 `assign` 可把 JSON 常量写入已声明的参数或顶层请求体字段，用于表达明确的状态转换等语义场景；常量必须通过目标 OpenAPI Schema 校验，且不能与同一步的变量绑定占用同一目标。执行器只消费校验后的 `CompiledAssignment`，不会执行模型生成代码。
+- 失败 Analyzer 已接入统一 Pipeline：运行时遇到 `failed/error` Observation 后暂停，DeepSeek 只能在 `continue_plan`、`add_diagnostic_case`、`add_diagnostic_workflow`、`revise_pending_actions`、`finish_investigation`、`finish_run` 中选择。单请求诊断使用 `DiagnosticCaseProposal`，只有 2–4 步且存在依赖的诊断才使用 Workflow DSL。
 - Analyzer 提议不能直接执行；诊断 case 会经 OpenAPI operation、参数/字段、Working Memory 变量、Schema、状态码、重复指纹、DELETE 审批和预算校验后编译为普通 `CompiledTestCase`；诊断 workflow 继续走原有确定性校验器。合法诊断插入队首并增加 `plan_version`，非法提议记录原因后回退原计划。
-- Analyzer 每轮消耗一个 Agent step，决策、假设、校验错误和新 action 写入 `checkpoint.json`、`trajectory.jsonl`、`run.json` 和 Markdown 报告。当前实现“追加一个诊断 case 或 workflow”的最小局部调整，尚未实现取消/替换多个 pending action 或全量 replan。
-- `ParameterBinding.source=working_memory` 可引用本次 Agent run 中已验证的变量；宿主以变量名查找实际值，在编译和执行前均按目标 Schema 校验，并保留 producer case 血缘。同名多值被视为歧义，不可供诊断动作引用；模型不能自行提供替代值。
+- 单请求诊断同时支持从 Working Memory 绑定动态值和向已声明参数/顶层请求体字段赋予 JSON 常量；两者都按目标 Schema 校验，不能占用同一目标。它可直接表达“对已创建订单尝试一次明确状态转换”，不需要为了设置一个请求体值伪造成多步 workflow。
+- 单请求诊断可显式声明 `repeat=once`，仅当编译后的请求指纹已经执行且本次 run 尚未重放过该指纹时才允许执行；权限随校验后的 diagnostic `PlannedAction` 传递，运行时再次复核并记录 `repeated_fingerprints`。普通 action、未声明重复和同一指纹的第二次诊断重放仍会被阻断。
+- Analyzer 每轮消耗一个 Agent step，决策、假设、校验错误、新增 action 和移除的 pending action 写入 `checkpoint.json`、`trajectory.jsonl`、`run.json` 和 Markdown 报告。`revise_pending_actions` 只能选择、删除和重排当前可信队列中的 action，不能创造新测试或修改已编译请求；新增测试仍必须走诊断 DSL 和确定性编译。该能力属于局部 replan，不实现无边界的全量重规划。
+- `ParameterBinding.source=working_memory` 可引用本次 Agent run 中已验证的变量；宿主向 Analyzer 暴露符合 DSL 标识符规则的 `memory_key`，模型只能复制 key，不能自行提供变量值。唯一名称保留原名；同名多值由宿主生成稳定的 `memory_<序号>_<名称>` key，并同时提供 action/case 来源供模型选择。编译和执行前均按目标 Schema 校验并保留 producer case 血缘。
 - `PlannedAction.origin` 区分初始计划与 Analyzer 追加的诊断动作。普通 `passed/blocked` 仍继续队列；诊断 case/workflow 无论结果为 `passed`、`failed`、`error` 还是 `blocked`，都在执行后回到 `analyzing`，使模型能使用新 HTTP Observation 确认或推翻假设；硬预算不足时仍由代码终止。
 - Analyzer 的模型调用边界具有确定性失败回退：超时、网络错误、响应损坏或一次结构修复后仍无法通过 Pydantic 时，运行不崩溃；代码消耗一个 Agent step，有待执行队列则 `continue_plan`，否则结束。审计记录保留 `proposed=null`、实际 fallback 和异常类型，不持久化可能包含模型输出或供应商细节的原始异常文本。
+- `AgentHypothesis` 使用稳定 `hypothesis_id` 和 `open/confirmed/rejected` 状态。新假设只能从 `open` 开始，诊断 action 通过 `PlannedAction.hypothesis_id` 保留关联；新 Observation 产生后，Analyzer 使用 `HypothesisUpdate` 更新原对象的状态、置信度和支持/反对证据，不重复追加同一假设的自然语言副本。未知 ID、重复 ID、非 open 假设的诊断或对已终结假设的再次更新均由代码拒绝。
+- Analyzer 决策按事务应用：假设变化、诊断编译和队列调整必须整体通过，任一校验失败都会回滚模型提出的状态变化并安全恢复原 pending plan，仅消耗本轮 Agent step、记录拒绝原因。假设证据必须引用本次 run 已存在的 Observation evidence ref。
+- Analyzer prompt 提供精简的 `evidence_registry`；`supporting_evidence/contradicting_evidence` 只能复制其中精确的 `evidence_ref`，自然语言解释放在 statement/rationale/reason，避免模型生成无法审计的伪引用。
+- `finish_investigation` 必须用本轮证据将一个 open 假设确认为 `confirmed/rejected`，随后继续剩余测试；`finish_run` 会结束整个 run。若仍有 pending action，提前 `finish_run` 只接受具有真实 Observation 证据的 high-confidence confirmed hypothesis update，避免模型凭弱理由跳过覆盖。
 - 修复后的真实缺陷运行生成 15 个 Observation 和 3 次 Analyzer 决策，完整生成 checkpoint、trajectory、run、report 和 pipeline 产物。三次均选择 `continue_plan`，因为重复邮箱被接受和未知用户返回 `200 {}` 已是直接契约证据；该运行验证了分析回路和正常终止，但没有实际选择新诊断 action，不用它声称 Working Memory 注入的真实模型成功率。
+- `confirm-conflict` 的真实 DeepSeek 评测在修复 workflow 夹具隔离、精确 evidence registry 和同名变量 memory key 后形成完整诊断闭环：14 个 Observation（11 passed、2 failed、1 blocked）、4 次 Analyzer 调用、2 个实际执行的诊断 GET、2 次 `finish_investigation`，一个假设被 high-confidence rejected，另一个被 high-confidence confirmed；之后继续执行原 pending plan并正常结束。该次 Initial Planner 因超出 20 请求预算触发确定性 fallback，因此不能用它声称 Planner 成功。精简事实记录保存在 `benchmarks/m2/confirm-conflict-v4-summary.json`，原始产物位于被 gitignore 的本地 runs 目录。
+- 未启动 buggy-shop 的真实基础设施评测验证了 guarded `finish_run`：两个独立 workflow 和一个最小 GET 诊断均在传输层 connection refused，Analyzer 用三个精确 evidence ref 将 `server_unreachable` 更新为 high-confidence confirmed，在仍有一个 pending workflow 时合法提前结束；总计 3 个 Observation、3 次 Analyzer 调用、1 个实际诊断请求。首轮模型诊断因重复已执行请求且未声明 `repeat=once` 被事务校验拒绝，未污染假设状态。精简事实记录保存在 `benchmarks/m2/backend-unavailable-summary.json`。
+- 无缺陷对照运行产生 5 个 Observation（4 passed、1 blocked）、0 个 failed/error、0 次 Analyzer 调用和 0 个假设；blocked 来自模型生成的重复状态 workflow 忘记声明 `repeat=once`，运行时正确阻止了重复 PATCH，未误报服务缺陷。`duplicate-email-accepted` 对照产生 1 个真实业务失败，Analyzer 先用 GET 用户诊断排除“服务未持久化”的竞争性解释，再将 `user_email_uniqueness_not_enforced` 更新为 high-confidence confirmed 并 `finish_investigation` 后继续计划。精简记录分别保存在 `benchmarks/m2/clean-control-summary.json` 与 `duplicate-email-summary.json`。
 
 ### M3：可交付性
 

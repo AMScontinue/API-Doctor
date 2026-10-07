@@ -1,0 +1,51 @@
+{
+  "run_id": "e0e89382-e3aa-46e2-bc9c-98dfe8997e5e",
+  "scenario": "duplicate-email-accepted",
+  "service_defects": [
+    "duplicate-email-accepted"
+  ],
+  "budgets": {
+    "max_tests": 20,
+    "max_steps": 30,
+    "remaining_tests": 0,
+    "remaining_steps": 6
+  },
+  "initial_planner": {
+    "used_fallback": true,
+    "validation_errors": [
+      "selected request cost exceeds max_tests"
+    ]
+  },
+  "execution": {
+    "observations": 13,
+    "passed": 11,
+    "failed": 1,
+    "blocked": 1,
+    "analyzer_calls": 2,
+    "analyzer_failures": 0,
+    "diagnostic_actions_executed": 1,
+    "plan_version": 2,
+    "termination_reason": "pending action queue exhausted"
+  },
+  "analyzer_decisions": [
+    "add_diagnostic_case",
+    "finish_investigation"
+  ],
+  "final_hypothesis": {
+    "hypothesis_id": "user_email_uniqueness_not_enforced",
+    "status": "confirmed",
+    "confidence": "high",
+    "supporting_evidence": [
+      "trajectory:actions/5",
+      "trajectory:actions/6"
+    ]
+  },
+  "diagnostic_reasoning": "GET /users/1 returned 200, ruling out non-persistence as the explanation for the duplicate create returning 201 instead of 409.",
+  "verified_capabilities": [
+    "business-rule workflow failure detection",
+    "competing explanation identified",
+    "single-request persistence diagnostic",
+    "high-confidence hypothesis confirmation",
+    "finish_investigation followed by resumed plan"
+  ]
+}

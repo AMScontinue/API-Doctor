@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 
 class WorkflowModel(BaseModel):
@@ -23,6 +23,12 @@ class ParameterBinding(WorkflowModel):
     source: Literal["workflow", "working_memory"] = "workflow"
 
 
+class ConstantAssignment(WorkflowModel):
+    location: Literal["path", "query", "header", "cookie", "body"]
+    name: str
+    value: JsonValue
+
+
 class WorkflowStep(WorkflowModel):
     step_id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$")
     operation_id: str
@@ -31,6 +37,7 @@ class WorkflowStep(WorkflowModel):
     repeat: Literal["forbid", "once"] = "forbid"
     extract: list[VariableExtraction] = Field(default_factory=list)
     bind: list[ParameterBinding] = Field(default_factory=list)
+    assign: list[ConstantAssignment] = Field(default_factory=list)
 
 
 class WorkflowCandidate(WorkflowModel):

@@ -8,7 +8,7 @@ from uuid import uuid4
 from pydantic import Field, model_validator
 
 from api_doctor.execution.models import WorkflowRun
-from api_doctor.generation.workflow_models import WorkflowCandidate
+from api_doctor.generation.workflow_models import ConstantAssignment, WorkflowCandidate
 from api_doctor.testspec.models import CompiledTestCase, StrictModel, TestResult
 
 
@@ -19,6 +19,8 @@ class PlannedAction(StrictModel):
     reason: str
     estimated_requests: int = Field(gt=0)
     origin: Literal["initial_plan", "diagnostic"] = "initial_plan"
+    hypothesis_id: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$")
+    allow_repeat: bool = False
 
 
 class InitialPlanProposal(StrictModel):
@@ -54,10 +56,21 @@ class AgentVariable(StrictModel):
 
 
 class AgentHypothesis(StrictModel):
+    hypothesis_id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$")
     statement: str
+    status: Literal["open", "confirmed", "rejected"] = "open"
     confidence: Literal["low", "medium", "high"]
     supporting_evidence: list[str] = Field(default_factory=list)
     contradicting_evidence: list[str] = Field(default_factory=list)
+
+
+class HypothesisUpdate(StrictModel):
+    hypothesis_id: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$")
+    status: Literal["open", "confirmed", "rejected"]
+    confidence: Literal["low", "medium", "high"]
+    supporting_evidence: list[str] = Field(default_factory=list)
+    contradicting_evidence: list[str] = Field(default_factory=list)
+    rationale: str
 
 
 class DiagnosticBinding(StrictModel):
@@ -71,7 +84,28 @@ class DiagnosticCaseProposal(StrictModel):
     operation_id: str
     purpose: str
     expected_status_codes: list[int] = Field(min_length=1)
+    repeat: Literal["forbid", "once"] = "forbid"
     bindings: list[DiagnosticBinding] = Field(default_factory=list)
+    assignments: list[ConstantAssignment] = Field(default_factory=list)
+
+
+class ActionReference(StrictModel):
+    kind: Literal["test_case", "workflow"]
+    item_id: str
+
+
+class PendingPlanRevision(StrictModel):
+    """A reordered subset of the already trusted pending queue."""
+
+    actions: list[ActionReference]
+    rationale: str
+
+    @model_validator(mode="after")
+    def unique_actions(self) -> "PendingPlanRevision":
+        identities = [(item.kind, item.item_id) for item in self.actions]
+        if len(identities) != len(set(identities)):
+            raise ValueError("pending plan revision contains duplicate action references")
+        return self
 
 
 class AnalysisDecision(StrictModel):
@@ -79,21 +113,45 @@ class AnalysisDecision(StrictModel):
         "continue_plan",
         "add_diagnostic_case",
         "add_diagnostic_workflow",
-        "finish",
+        "revise_pending_actions",
+        "finish_investigation",
+        "finish_run",
     ]
     reason: str
-    hypothesis: AgentHypothesis | None = None
+    new_hypothesis: AgentHypothesis | None = None
+    hypothesis_update: HypothesisUpdate | None = None
+    diagnostic_hypothesis_id: str | None = Field(
+        default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$"
+    )
     diagnostic_case: DiagnosticCaseProposal | None = None
     diagnostic_workflow: WorkflowCandidate | None = None
+    pending_revision: PendingPlanRevision | None = None
 
     @model_validator(mode="after")
     def decision_payload_matches_action(self) -> "AnalysisDecision":
         expected_case = self.decision == "add_diagnostic_case"
         expected_workflow = self.decision == "add_diagnostic_workflow"
+        expected_revision = self.decision == "revise_pending_actions"
         if (self.diagnostic_case is not None) != expected_case:
             raise ValueError("diagnostic_case is required only for add_diagnostic_case")
         if (self.diagnostic_workflow is not None) != expected_workflow:
             raise ValueError("diagnostic_workflow is required only for add_diagnostic_workflow")
+        if (self.pending_revision is not None) != expected_revision:
+            raise ValueError("pending_revision is required only for revise_pending_actions")
+        if self.new_hypothesis is not None and self.hypothesis_update is not None:
+            raise ValueError("an analysis decision cannot create and update a hypothesis together")
+        expects_hypothesis = expected_case or expected_workflow
+        if (self.diagnostic_hypothesis_id is not None) != expects_hypothesis:
+            raise ValueError(
+                "diagnostic_hypothesis_id is required only for diagnostic decisions"
+            )
+        if self.decision == "finish_investigation" and (
+            self.hypothesis_update is None
+            or self.hypothesis_update.status not in {"confirmed", "rejected"}
+        ):
+            raise ValueError(
+                "finish_investigation requires a confirmed or rejected hypothesis_update"
+            )
         return self
 
 
@@ -103,10 +161,13 @@ class AnalysisRecord(StrictModel):
         "continue_plan",
         "add_diagnostic_case",
         "add_diagnostic_workflow",
-        "finish",
+        "revise_pending_actions",
+        "finish_investigation",
+        "finish_run",
     ]
     validation_errors: list[str] = Field(default_factory=list)
     added_action: PlannedAction | None = None
+    removed_actions: list[PlannedAction] = Field(default_factory=list)
     analyzer_error: str | None = None
 
 
@@ -125,14 +186,26 @@ class AgentState(StrictModel):
     remaining_step_budget: int = Field(ge=0)
     delete_approved: bool = False
     executed_fingerprints: set[str] = Field(default_factory=set)
+    repeated_fingerprints: set[str] = Field(default_factory=set)
     termination_reason: str | None = None
 
     def unambiguous_variables(self) -> dict[str, AgentVariable]:
-        """Expose only names that identify exactly one value and provenance record."""
+        """Expose stable keys for every value without allowing ambiguous lookup."""
         grouped: dict[str, list[AgentVariable]] = {}
         for variable in self.variables:
             grouped.setdefault(variable.name, []).append(variable)
-        return {name: items[0] for name, items in grouped.items() if len(items) == 1}
+        available: dict[str, AgentVariable] = {}
+        for index, variable in enumerate(self.variables, start=1):
+            if len(grouped[variable.name]) == 1:
+                key = variable.name
+            else:
+                safe_name = "".join(
+                    character if character.isalnum() or character == "_" else "_"
+                    for character in variable.name
+                )
+                key = f"memory_{index}_{safe_name}"
+            available[key] = variable
+        return available
 
 
 class InitialPlanningResult(StrictModel):

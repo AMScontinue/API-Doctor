@@ -80,11 +80,14 @@ class PipelineGateway:
                 {
                     "decision": "add_diagnostic_case",
                     "reason": "probe one declared not-found response",
-                    "hypothesis": {
+                    "new_hypothesis": {
+                        "hypothesis_id": "H-unknown-resource",
                         "statement": "unknown resources may not map to 404",
+                        "status": "open",
                         "confidence": "medium",
                         "supporting_evidence": ["trajectory:actions/1"],
                     },
+                    "diagnostic_hypothesis_id": "H-unknown-resource",
                     "diagnostic_case": {
                         "case_id": "unknown_user_probe",
                         "operation_id": "getUser",
@@ -96,10 +99,12 @@ class PipelineGateway:
                 else {
                     "decision": "continue_plan",
                     "reason": "the diagnostic result resolved the active hypothesis",
-                    "hypothesis": {
-                        "statement": "the diagnostic observation resolved the branch",
+                    "hypothesis_update": {
+                        "hypothesis_id": "H-unknown-resource",
+                        "status": "confirmed",
                         "confidence": "high",
                         "supporting_evidence": ["trajectory:actions/2"],
+                        "rationale": "the diagnostic reproduced the expected branch",
                     },
                 }
             )
@@ -241,6 +246,13 @@ def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkey
     assert result.run.analyses[1].applied_decision == "continue_plan"
     assert result.run.state.plan_version == 2
     assert result.run.state.phase == "finished"
+    assert result.run.state.hypotheses[0].hypothesis_id == "H-unknown-resource"
+    assert result.run.state.hypotheses[0].status == "confirmed"
+    assert result.run.state.hypotheses[0].confidence == "high"
+    assert result.run.state.hypotheses[0].supporting_evidence == [
+        "trajectory:actions/1",
+        "trajectory:actions/2",
+    ]
     assert result.model_usage["analyzer"].calls == 2
 
 

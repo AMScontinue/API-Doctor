@@ -264,6 +264,83 @@ def test_duplicate_case_is_blocked_without_spending_request_budget(monkeypatch):
     assert run.state.remaining_step_budget == 0
 
 
+def test_diagnostic_case_may_repeat_an_executed_fingerprint_only_once(monkeypatch):
+    catalog, plan, workflows = _inputs()
+    monkeypatch.setattr("api_doctor.agent.runtime.execute_case", _fake_pass)
+    planned = plan.cases[0]
+    diagnostic = PlannedAction(
+        kind="test_case",
+        item_id=planned.case.case_id,
+        priority=100,
+        reason="one evidence-backed replay",
+        estimated_requests=1,
+        origin="diagnostic",
+        allow_repeat=True,
+    )
+    state = _state(catalog, plan, [diagnostic, diagnostic.model_copy()], tests=2, steps=2)
+    state.executed_fingerprints.add(planned.request_fingerprint)
+
+    first = run_agent_actions(state, plan, workflows, catalog, _config())
+    resumed = first.state.model_copy(update={"phase": "executing"})
+    second = run_agent_actions(resumed, plan, workflows, catalog, _config())
+
+    assert first.state.observations[-1].outcome == "passed"
+    assert planned.request_fingerprint in first.state.repeated_fingerprints
+    assert second.state.observations[-1].outcome == "blocked"
+
+
+def test_independent_workflows_may_use_the_same_baseline_fixture(monkeypatch):
+    catalog, plan, workflows = _inputs()
+    second = workflows[0].model_copy(update={"workflow_id": "order_create_read_again"})
+    actions = [
+        PlannedAction(
+            kind="workflow",
+            item_id=workflow.workflow_id,
+            priority=100 - index,
+            reason="independent lifecycle coverage",
+            estimated_requests=2,
+        )
+        for index, workflow in enumerate([workflows[0], second])
+    ]
+    created_bodies = []
+
+    def fake_execute(case, policy, operation=None):
+        del policy
+        if operation.operation_id == "createOrder":
+            created_bodies.append(case.request.body)
+            order_id = len(created_bodies)
+            return CaseResult(
+                case_id=case.case_id,
+                outcome="passed",
+                actual_status=201,
+                expected_statuses=case.assertions[0].allowed,
+                response_body={"id": order_id},
+                request_url="http://127.0.0.1:18080/orders",
+            )
+        order_id = case.request.path_parameters["id"]
+        return CaseResult(
+            case_id=case.case_id,
+            outcome="passed",
+            actual_status=200,
+            expected_statuses=case.assertions[0].allowed,
+            response_body={"id": order_id},
+            request_url=f"http://127.0.0.1:18080/orders/{order_id}",
+        )
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_agent_actions(
+        _state(catalog, plan, actions, tests=4, steps=4),
+        plan,
+        [workflows[0], second],
+        catalog,
+        _config(max_tests=4),
+    )
+
+    assert [item.outcome for item in run.state.observations] == ["passed", "passed"]
+    assert len(created_bodies) == 2
+    assert created_bodies[0] == created_bodies[1]
+
+
 def test_tampered_action_cost_is_rejected_before_http(monkeypatch):
     catalog, plan, workflows = _inputs()
     called = False

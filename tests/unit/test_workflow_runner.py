@@ -223,6 +223,57 @@ def test_injects_response_variable_into_request_body(monkeypatch):
     assert run.records[1].compiled_case.dependencies == ["WF-user_to_order-create-user"]
 
 
+def test_applies_validated_constant_request_body_assignment(monkeypatch):
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    candidate = WorkflowCandidate.model_validate(
+        {
+            "workflow_id": "order_transition",
+            "purpose": "create and confirm an order",
+            "confidence": "high",
+            "reasoning": "the second step needs an explicit target state",
+            "steps": [
+                {
+                    "step_id": "create",
+                    "operation_id": "createOrder",
+                    "purpose": "create an order",
+                    "extract": [
+                        {
+                            "variable": "order_id",
+                            "response_expression": "$response.body#/id",
+                        }
+                    ],
+                },
+                {
+                    "step_id": "confirm",
+                    "operation_id": "updateOrderStatus",
+                    "purpose": "confirm the created order",
+                    "bind": [
+                        {"location": "path", "name": "id", "variable": "order_id"}
+                    ],
+                    "assign": [
+                        {"location": "body", "name": "status", "value": "confirmed"}
+                    ],
+                },
+            ],
+        }
+    )
+    workflow = validate_workflows([candidate], catalog).compiled_workflows()[0]
+    observed_statuses = []
+
+    def fake_execute(case, policy, operation=None):
+        del policy
+        if operation.operation_id == "createOrder":
+            return _passed(case, 201, {"id": 7, "status": "created"})
+        observed_statuses.append(case.request.body["status"])
+        return _passed(case, 200, {"id": 7, "status": "confirmed"})
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_workflow(workflow, catalog, _config(max_tests=2))
+
+    assert run.metrics.passed == 2
+    assert observed_statuses == ["confirmed"]
+
+
 def test_injects_working_memory_variable_into_multistep_diagnostic(monkeypatch):
     catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
     candidate = WorkflowCandidate.model_validate(

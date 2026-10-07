@@ -1,0 +1,34 @@
+{
+  "run_id": "83e9a9ee-17f4-45e0-9336-27955ebe7ede",
+  "scenario": "clean-control",
+  "service_defects": [],
+  "budgets": {
+    "max_tests": 12,
+    "max_steps": 20,
+    "remaining_tests": 1,
+    "remaining_steps": 7
+  },
+  "initial_planner": {
+    "used_fallback": true,
+    "validation_errors": [
+      "selected request cost exceeds max_tests"
+    ]
+  },
+  "execution": {
+    "observations": 5,
+    "passed": 4,
+    "blocked": 1,
+    "failed": 0,
+    "errors": 0,
+    "analyzer_calls": 0,
+    "hypotheses": 0,
+    "plan_version": 1,
+    "termination_reason": "pending action queue exhausted"
+  },
+  "blocked_detail": "The LLM-proposed repeated-status workflow omitted repeat=once, so runtime duplicate protection blocked its final identical PATCH. It was not reported as an API defect and did not trigger Analyzer.",
+  "verified_capabilities": [
+    "clean service produced no failed or error observations",
+    "Analyzer did not create false hypotheses",
+    "runtime duplicate protection remained active"
+  ]
+}

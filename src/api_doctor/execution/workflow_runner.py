@@ -28,6 +28,7 @@ from api_doctor.testspec.models import (
 from api_doctor.testspec.fusion import request_fingerprint
 from api_doctor.testspec.openapi_compiler import OpenAPICompileError, compile_openapi_candidate
 from api_doctor.workflows.validation import (
+    CompiledAssignment,
     CompiledBinding,
     CompiledExtraction,
     CompiledWorkflow,
@@ -99,6 +100,7 @@ class _WorkflowRunner:
             parameter_overrides, body_overrides, dependencies = self._binding_values(
                 step.bind
             )
+            self._apply_assignments(step.assign, parameter_overrides, body_overrides)
             candidate = SemanticTestCandidate(
                 rule_id=f"workflow:{self.workflow.workflow_id}:{step.step_id}",
                 status="compilable",
@@ -214,6 +216,18 @@ class _WorkflowRunner:
                 parameter_overrides[(binding.location, binding.name)] = variable.value
             dependencies.add(variable.producer_case_id)
         return parameter_overrides, body_overrides, dependencies
+
+    @staticmethod
+    def _apply_assignments(
+        assignments: list[CompiledAssignment],
+        parameter_overrides: dict[tuple[str, str], object],
+        body_overrides: dict[str, object],
+    ) -> None:
+        for assignment in assignments:
+            if assignment.location == "body":
+                body_overrides[assignment.name] = assignment.value
+            else:
+                parameter_overrides[(assignment.location, assignment.name)] = assignment.value
 
     def _capture(
         self,
