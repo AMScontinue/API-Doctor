@@ -213,6 +213,7 @@ class InitialPlanningResult(StrictModel):
     state: AgentState
     used_fallback: bool = False
     validation_errors: list[str] = Field(default_factory=list)
+    adjustments: list[str] = Field(default_factory=list)
 
 
 class AgentActionRecord(StrictModel):

@@ -154,7 +154,7 @@ def test_unknown_model_reference_triggers_deterministic_fallback():
     assert result.state.pending_actions[0].item_id == "create_read_user"
 
 
-def test_cost_drift_and_budget_overflow_cannot_enter_agent_state():
+def test_cost_drift_is_corrected_and_model_order_is_packed_to_budget():
     catalog, plan, workflows = _inputs()
     proposal = InitialPlanProposal(
         strategy="claim cheap coverage",
@@ -178,10 +178,48 @@ def test_cost_drift_and_budget_overflow_cannot_enter_agent_state():
         max_steps=4,
     )
 
-    assert result.used_fallback is True
-    assert any("cost drifted" in error for error in result.validation_errors)
-    assert any("exceeds max_tests" in error for error in result.validation_errors)
-    assert sum(item.estimated_requests for item in result.state.pending_actions) <= 2
+    assert result.used_fallback is False
+    assert result.validation_errors == []
+    assert [item.item_id for item in result.state.pending_actions] == [
+        "create_read_user"
+    ]
+    assert result.state.pending_actions[0].estimated_requests == 2
+    assert any("recalculated" in adjustment for adjustment in result.adjustments)
+    assert any("omitted" in adjustment for adjustment in result.adjustments)
+
+
+def test_budget_packing_skips_large_action_and_keeps_later_fitting_action():
+    catalog, plan, workflows = _inputs()
+    case_id = plan.cases[0].case.case_id
+    proposal = InitialPlanProposal(
+        strategy="prefer lifecycle, then retain compact coverage",
+        selected=[
+            _proposal().selected[0],
+            {
+                "kind": "test_case",
+                "item_id": case_id,
+                "priority": 80,
+                "reason": "fits if the lifecycle is too expensive",
+                "estimated_requests": 1,
+            },
+        ],
+    )
+
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=plan,
+        workflows=workflows,
+        proposed_plan=proposal,
+        max_tests=1,
+        max_steps=4,
+    )
+
+    assert result.used_fallback is False
+    assert [item.item_id for item in result.state.pending_actions] == [case_id]
+    assert result.state.strategy == proposal.strategy
+    assert result.adjustments == [
+        "omitted 'create_read_user': trusted cost 2 exceeds remaining execution budget 1"
+    ]
 
 
 def test_unapproved_delete_workflow_is_absent_from_inventory_and_fallback():

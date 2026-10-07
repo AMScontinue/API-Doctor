@@ -70,8 +70,9 @@ def build_initial_plan_prompt(
         "task": "Select and prioritize trusted API tests for the initial agent plan. Reference only supplied item IDs; do not create requests, operations, assertions, or URLs.",
         "goal": "Maximize contract and semantic fault information within the request budget while respecting dependencies and risk.",
         "constraints": [
-            f"The sum of estimated_requests must not exceed {max_tests}.",
-            f"Initial planning consumes one agent step; selected request cost must not exceed {executable_step_budget} remaining agent steps.",
+            "Return selected actions in descending execution priority.",
+            f"The request budget is {max_tests}; the host recalculates trusted costs and keeps the highest-ranked actions that fit.",
+            f"Initial planning consumes one agent step, leaving at most {executable_step_budget} execution steps.",
             "Prefer workflows that unlock validated cross-operation coverage.",
             "Balance happy paths, contract negatives, and semantic business-rule tests.",
             "DELETE actions require human approval; selection does not grant approval.",
@@ -127,15 +128,16 @@ def _inventory(
     return inventory
 
 
-def _validate_proposal(
+def _prepare_proposal(
     proposal: InitialPlanProposal,
     inventory: dict[tuple[str, str], int],
     *,
     max_tests: int,
     max_steps: int,
-) -> list[str]:
+) -> tuple[InitialPlanProposal, list[str], list[str]]:
     errors: list[str] = []
-    request_count = 0
+    adjustments: list[str] = []
+    known_actions: list[PlannedAction] = []
     for action in proposal.selected:
         key = (action.kind, action.item_id)
         actual_cost = inventory.get(key)
@@ -143,15 +145,29 @@ def _validate_proposal(
             errors.append(f"unknown {action.kind} item_id {action.item_id!r}")
             continue
         if action.estimated_requests != actual_cost:
-            errors.append(f"estimated request cost drifted for {action.item_id!r}")
-        request_count += actual_cost
-    if request_count > max_tests:
-        errors.append("selected request cost exceeds max_tests")
-    if request_count > max(max_steps - 1, 0):
-        errors.append("selected request cost exceeds remaining agent step budget")
+            adjustments.append(
+                f"recalculated {action.item_id!r} request cost "
+                f"from {action.estimated_requests} to {actual_cost}"
+            )
+        known_actions.append(action.model_copy(update={"estimated_requests": actual_cost}))
     if inventory and not proposal.selected:
         errors.append("initial plan selected no executable work")
-    return errors
+
+    if errors:
+        return proposal, errors, adjustments
+
+    remaining = min(max_tests, max(max_steps - 1, 0))
+    selected: list[PlannedAction] = []
+    for action in known_actions:
+        if action.estimated_requests <= remaining:
+            selected.append(action)
+            remaining -= action.estimated_requests
+        else:
+            adjustments.append(
+                f"omitted {action.item_id!r}: trusted cost "
+                f"{action.estimated_requests} exceeds remaining execution budget {remaining}"
+            )
+    return proposal.model_copy(update={"selected": selected}), errors, adjustments
 
 
 def _fallback_plan(
@@ -210,7 +226,7 @@ def initialize_agent_state(
         raise ValueError("max_tests must be at least 1")
     if max_steps < 1:
         raise ValueError("max_steps must be at least 1")
-    errors = _validate_proposal(
+    prepared, errors, adjustments = _prepare_proposal(
         proposed_plan,
         _inventory(plan, workflows, delete_approved=delete_approved),
         max_tests=max_tests,
@@ -225,12 +241,13 @@ def initialize_agent_state(
             delete_approved=delete_approved,
         )
         if errors
-        else proposed_plan
+        else prepared
     )
     return InitialPlanningResult(
         proposed_plan=proposed_plan,
         used_fallback=bool(errors),
         validation_errors=errors,
+        adjustments=adjustments,
         state=AgentState(
             spec_fingerprint=spec_fingerprint,
             phase="executing" if accepted.selected else "finished",
