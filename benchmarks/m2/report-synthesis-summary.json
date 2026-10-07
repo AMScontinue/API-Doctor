@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-08",
+  "evaluations": [
+    {
+      "run_id": "83b07009-a111-492f-bf02-ce29691f620b",
+      "artifact_directory": "runs/m2/report-synthesizer-confirm-conflict",
+      "mode": "complete Agent pipeline",
+      "observations": {
+        "passed": 3,
+        "failed": 0,
+        "error": 0,
+        "blocked": 1
+      },
+      "report_synthesizer": {
+        "calls": 1,
+        "prompt_tokens": 2427,
+        "completion_tokens": 1547,
+        "used_fallback": false,
+        "validation_errors": 0,
+        "confirmed_findings": 0,
+        "possible_findings": 0
+      },
+      "verified_behavior": "The report did not invent a defect, described the blocked action as untested, and cited registered ambiguity and coverage-gap sources."
+    },
+    {
+      "source_run_id": "6e8efca4-9883-4d60-b1ad-785c5f92e15b",
+      "source_artifact_directory": "runs/m2/budget-confirm-conflict-room",
+      "mode": "report-only replay without HTTP",
+      "report_synthesizer": {
+        "calls": 1,
+        "used_fallback": false,
+        "validation_errors": 0,
+        "confirmed_findings": 1,
+        "possible_findings": 0
+      },
+      "confirmed_finding": {
+        "hypothesis_id": "confirm_transition_rejected",
+        "severity": "high",
+        "evidence_refs": [
+          "trajectory:actions/2",
+          "trajectory:actions/3"
+        ]
+      },
+      "verified_behavior": "The report converted a confirmed hypothesis into one evidence-bound finding and did not send another HTTP request."
+    }
+  ]
+}

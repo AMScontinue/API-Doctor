@@ -19,6 +19,7 @@ from api_doctor.agent.models import (
 )
 from api_doctor.agent.planning import initialize_agent_state, propose_initial_plan
 from api_doctor.agent.runtime import CheckpointCallback, run_agent_actions
+from api_doctor.agent.reporting import ReportSynthesisResult, synthesize_report
 from api_doctor.execution.models import RunConfig
 from api_doctor.generation.semantic_discovery import SemanticDiscovery, discover_semantic_tests
 from api_doctor.generation.workflow_discovery import discover_workflows
@@ -48,6 +49,7 @@ class AgentPipelineResult:
     test_plan: FinalTestPlan
     planning: InitialPlanningResult
     run: AgentRun
+    reporting: ReportSynthesisResult
     model_usage: dict[str, ModelCallTelemetry]
 
     @property
@@ -88,6 +90,14 @@ class AgentPipeline:
             checkpoint,
             analysis_checkpoint,
         )
+        reporting = synthesize_report(
+            run,
+            semantic_response.value,
+            workflow_response.value,
+            workflow_validation,
+            plan,
+            self.gateway,
+        )
 
         return AgentPipelineResult(
             semantic_discovery=semantic_response.value,
@@ -96,16 +106,19 @@ class AgentPipeline:
             test_plan=plan,
             planning=planning,
             run=run,
+            reporting=reporting.result,
             model_usage={
                 "semantic_discovery": semantic_response.telemetry,
                 "workflow_discovery": workflow_response.telemetry,
                 "initial_planner": planning_response.telemetry,
                 "analyzer": analyzer_usage,
+                "report_synthesizer": reporting.telemetry,
                 "total": (
                     semantic_response.telemetry
                     + workflow_response.telemetry
                     + planning_response.telemetry
                     + analyzer_usage
+                    + reporting.telemetry
                 ),
             },
         )

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from api_doctor.agent.models import AnalysisRecord, AgentActionRecord, AgentRun, AgentState
 from api_doctor.agent.pipeline import AgentPipelineResult
+from api_doctor.agent.reporting import ReportSynthesisResult
 from api_doctor.observability import redact
 
 
@@ -78,7 +79,11 @@ class AgentArtifactStore:
         with self.trajectory_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(redact(event), ensure_ascii=False) + "\n")
 
-    def finalize(self, run: AgentRun) -> dict[str, Path]:
+    def finalize(
+        self,
+        run: AgentRun,
+        reporting: ReportSynthesisResult | None = None,
+    ) -> dict[str, Path]:
         run_path = self.output_dir / "run.json"
         report_path = self.output_dir / "report.md"
         run_path.write_text(
@@ -86,7 +91,7 @@ class AgentArtifactStore:
             + "\n",
             encoding="utf-8",
         )
-        report_path.write_text(render_agent_report(run), encoding="utf-8")
+        report_path.write_text(render_agent_report(run, reporting), encoding="utf-8")
         if not self.trajectory_path.exists():
             self.trajectory_path.touch()
         if not self.checkpoint_path.exists():
@@ -107,7 +112,13 @@ class AgentArtifactStore:
         }
 
     def finalize_pipeline(self, result: AgentPipelineResult) -> dict[str, Path]:
-        paths = self.finalize(result.run)
+        paths = self.finalize(result.run, result.reporting)
+        analysis_path = self.output_dir / "report-analysis.json"
+        analysis_path.write_text(
+            json.dumps(redact(result.reporting.model_dump(mode="json")), ensure_ascii=False, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
         pipeline_path = self.output_dir / "pipeline.json"
         pipeline_path.write_text(
             json.dumps(redact(_pipeline_payload(result)), ensure_ascii=False, indent=2)
@@ -115,6 +126,7 @@ class AgentArtifactStore:
             encoding="utf-8",
         )
         paths["pipeline"] = pipeline_path
+        paths["report_analysis"] = analysis_path
         return paths
 
 
@@ -125,13 +137,17 @@ def _pipeline_payload(result: AgentPipelineResult) -> dict[str, object]:
         "workflow_discovery": result.workflow_discovery.model_dump(mode="json"),
         "workflow_validation": result.workflow_validation.model_dump(mode="json"),
         "planning": result.planning.model_dump(mode="json"),
+        "reporting": result.reporting.model_dump(mode="json"),
         "model_usage": {
             name: asdict(usage) for name, usage in result.model_usage.items()
         },
     }
 
 
-def render_agent_report(run: AgentRun) -> str:
+def render_agent_report(
+    run: AgentRun,
+    reporting: ReportSynthesisResult | None = None,
+) -> str:
     state = run.state
     lines = [
         "# API Doctor Agent run",
@@ -163,6 +179,8 @@ def render_agent_report(run: AgentRun) -> str:
         )
         lines.extend(f"- Violation: {item}" for item in observation.violations)
         lines.append("")
+    if reporting is not None:
+        lines.extend(_render_report_analysis(reporting))
     lines.extend(["## Analyzer decisions", ""])
     if not run.analyses:
         lines.append("No failure required LLM analysis.")
@@ -202,3 +220,37 @@ def render_agent_report(run: AgentRun) -> str:
         lines.extend(f"- Budget adjustment: {item}" for item in analysis.adjustments)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_report_analysis(reporting: ReportSynthesisResult) -> list[str]:
+    analysis = reporting.analysis
+    lines = [
+        "## Final analysis",
+        "",
+        f"- Synthesis fallback: `{reporting.used_fallback}`",
+        f"- Executive summary: {analysis.executive_summary}",
+    ]
+    if reporting.synthesizer_error is not None:
+        lines.append(f"- Synthesizer error: {reporting.synthesizer_error}")
+    lines.extend(f"- Rejected synthesis: {item}" for item in reporting.validation_errors)
+    sections = (
+        ("Confirmed findings", analysis.confirmed_findings, "evidence_refs"),
+        ("Possible findings", analysis.possible_findings, "evidence_refs"),
+        ("Ruled-out hypotheses", analysis.ruled_out_hypotheses, "source_refs"),
+        ("Business-rule ambiguities", analysis.business_rule_ambiguities, "source_refs"),
+        ("Coverage gaps", analysis.coverage_gaps, "source_refs"),
+        ("Recommended next steps", analysis.next_steps, "source_refs"),
+    )
+    for title, items, ref_field in sections:
+        lines.extend(["", f"### {title}", ""])
+        if not items:
+            lines.append("None reported.")
+            continue
+        for item in items:
+            refs = getattr(item, ref_field)
+            lines.append(f"- **{item.title}** — {item.summary} Sources: {', '.join(refs)}")
+            recommendation = getattr(item, "recommendation", None)
+            if recommendation:
+                lines.append(f"  Recommendation: {recommendation}")
+    lines.append("")
+    return lines

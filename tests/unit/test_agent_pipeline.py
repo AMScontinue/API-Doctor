@@ -10,6 +10,7 @@ from api_doctor.agent.models import (
 )
 from api_doctor.agent.persistence import AgentArtifactStore
 from api_doctor.agent.pipeline import AgentPipeline
+from api_doctor.agent.reporting import ReportAnalysis
 from api_doctor.execution.models import RunConfig
 from api_doctor.generation.semantic_discovery import SemanticDiscovery
 from api_doctor.generation.workflow_models import WorkflowDiscovery
@@ -109,6 +110,17 @@ class PipelineGateway:
                 }
             )
             value = AnalysisDecision.model_validate(payload)
+        elif response_model is ReportAnalysis:
+            value = ReportAnalysis(
+                executive_summary="The run completed using the supplied evidence.",
+                next_steps=[
+                    {
+                        "title": "Review termination",
+                        "summary": "Use the recorded termination reason for follow-up.",
+                        "source_refs": ["run:termination"],
+                    }
+                ],
+            )
         else:
             raise AssertionError(f"unexpected response model: {response_model}")
         return ModelResponse(
@@ -147,16 +159,19 @@ def test_pipeline_passes_in_memory_state_directly_to_runtime(monkeypatch, tmp_pa
         "semantic-test-discovery",
         "workflow-discovery",
         "initial-planner",
+        "report-synthesizer",
     ]
     assert captured["state"] is result.planning.state
     assert captured["plan"] == result.test_plan
     assert result.run.state.phase == "finished"
-    assert result.model_usage["total"].calls == 3
+    assert result.model_usage["total"].calls == 4
     assert result.workflow_validation.summary()["rejected"] == 1
     artifacts = AgentArtifactStore(tmp_path / "run").finalize_pipeline(result)
     pipeline = artifacts["pipeline"].read_text(encoding="utf-8")
     assert '"workflow_validation"' in pipeline
     assert '"initial_planner"' in pipeline
+    assert '"reporting"' in pipeline
+    assert artifacts["report_analysis"].exists()
 
 
 def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkeypatch):
@@ -240,7 +255,7 @@ def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkey
     )
 
     assert calls == 2
-    assert gateway.calls[-1] == "observation-analyzer"
+    assert gateway.calls[-1] == "report-synthesizer"
     assert gateway.analysis_calls == 2
     assert result.run.analyses[0].applied_decision == "add_diagnostic_case"
     assert result.run.analyses[1].applied_decision == "continue_plan"

@@ -91,3 +91,7 @@ The selected budget results are saved in `budget-management-summary.json`.
 They compare a run with enough room for a diagnostic plus follow-up analysis
 against a tight run where the Analyzer correctly leaves the hypothesis open,
 skips diagnosis, and spends the final budgets on independent coverage.
+
+Selected final-report results are saved in `report-synthesis-summary.json`.
+They cover both a no-failure control that must not invent a defect and a
+report-only replay of a confirmed defect that must preserve exact evidence.

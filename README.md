@@ -2,7 +2,7 @@
 
 API Doctor 是一个面向 OpenAPI 3.x 服务的自主接口测试与故障分析 Agent。它结合确定性 Schema 测试与 DeepSeek 语义分析，通过受控 HTTP 工具执行测试，根据真实响应追加诊断实验，并输出证据、复现步骤和 pytest 回归用例。
 
-当前已完成 M0 TestSpec 技术验证，并开始实现 M1 确定性基线。M1-A 已提供真实 OpenAPI 3.x YAML/JSON 加载、本地 `$ref` 解析、规范化 Operation Catalog 和检查命令。DeepSeek 的 M0 小样本结果只用于技术验证，不代表产品准确率。
+当前已完成 M1 确定性基线和 M2 的主要 Agent 闭环：DeepSeek 语义发现、跨接口 workflow、初始规划、真实 HTTP 工具执行、Observation 分析、hypothesis、受限诊断、局部 replan、预算管理和最终证据报告。DeepSeek 的小样本结果只用于技术与端到端验证，不代表产品准确率。
 
 ## 核心设计
 
@@ -127,7 +127,7 @@ Workflow step 可选声明 `expected_status_codes`，但只能使用该 operatio
   --output runs/m2/initial-agent-plan.json
 ```
 
-模型只能引用输入 inventory 中的 `item_id` 并声明优先级、理由和请求成本。代码重新计算真实成本，检查 ID、请求预算和 Agent step 预算；模型伪造 ID、谎报成本或超预算时使用确定性 fallback。没有 `--approve-delete` 时，包含 DELETE 的工作流不会进入 Planner inventory 或 fallback。输出是显式 `AgentState`，此命令当前尚不执行 pending actions。
+模型只能引用输入 inventory 中的 `item_id` 并声明优先级、理由和请求成本。代码重新计算真实成本，检查 ID、请求预算和 Agent step 预算；成本估错会被纠正，超预算选择会按模型优先级确定性裁剪，伪造 ID 等语义越权才会触发 fallback。没有 `--approve-delete` 时，包含 DELETE 的工作流不会进入 Planner inventory 或 fallback。输出是显式 `AgentState`，此命令本身不执行 pending actions。
 
 执行已经校验的 Agent pending queue（不产生新的 LLM 调用）：
 
@@ -155,7 +155,7 @@ Workflow step 可选声明 `expected_status_codes`，但只能使用该 operatio
   --output runs/m2/agent-run
 ```
 
-当前闭环覆盖 LLM 语义候选发现、确定性测试计划构建、LLM workflow 发现与校验、LLM 初始规划、真实 HTTP 执行、状态更新和持久化。`pipeline.json` 保存脱敏后的发现、校验、计划和分阶段模型用量，`run.json` 保存执行结果；运行目录必须为空，程序不会覆盖已有运行。失败会停在 `analyzing`；Observation 驱动的诊断与局部 replan 属于下一阶段。
+当前闭环覆盖 LLM 语义候选发现、确定性测试计划构建、LLM workflow 发现与校验、LLM 初始规划、真实 HTTP 执行、Observation 分析、受限诊断、局部 replan、状态更新和最终 LLM 证据总结。`pipeline.json` 保存脱敏后的发现、校验、计划、报告分析和分阶段模型用量，`run.json` 保存执行结果，`report-analysis.json` 保存经证据引用校验的类型化总结，`report.md` 同时保留事实记录和最终分析。运行目录必须为空，程序不会覆盖已有运行。
 
 从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
 
