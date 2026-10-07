@@ -18,6 +18,7 @@ class PlannedAction(StrictModel):
     priority: int = Field(ge=0, le=100)
     reason: str
     estimated_requests: int = Field(gt=0)
+    origin: Literal["initial_plan", "diagnostic"] = "initial_plan"
 
 
 class InitialPlanProposal(StrictModel):

@@ -208,7 +208,7 @@ def test_prompt_contains_real_failure_and_remaining_budgets():
     catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
     prompt = build_analysis_prompt(_state(catalog), _failure(), catalog)
 
-    assert prompt["failed_action"]["observation"]["outcome"] == "failed"
+    assert prompt["triggering_action"]["observation"]["outcome"] == "failed"
     assert prompt["working_memory"]["remaining_test_budget"] == 4
     assert prompt["catalog"]["operations"]
 

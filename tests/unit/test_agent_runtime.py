@@ -208,6 +208,31 @@ def test_failure_pauses_queue_for_future_analyzer(monkeypatch):
     assert run.state.observations[0].outcome == "failed"
 
 
+def test_passed_diagnostic_action_returns_to_analyzer(monkeypatch):
+    catalog, plan, workflows = _inputs()
+    monkeypatch.setattr("api_doctor.agent.runtime.execute_case", _fake_pass)
+    diagnostic = PlannedAction(
+        kind="test_case",
+        item_id=plan.cases[0].case.case_id,
+        priority=100,
+        reason="collect evidence for an active hypothesis",
+        estimated_requests=1,
+        origin="diagnostic",
+    )
+
+    run = run_agent_actions(
+        _state(catalog, plan, [diagnostic]),
+        plan,
+        workflows,
+        catalog,
+        _config(),
+    )
+
+    assert run.state.observations[0].outcome == "passed"
+    assert run.state.phase == "analyzing"
+    assert run.state.completed_actions == [diagnostic]
+
+
 def test_duplicate_case_is_blocked_without_spending_request_budget(monkeypatch):
     catalog, plan, workflows = _inputs()
     calls = 0

@@ -97,6 +97,8 @@ class _AgentRunner:
                 self._merge_variables(action.item_id, record.workflow_run)
             if self.state.termination_reason == "trusted action validation failed":
                 self._finish(self.state.termination_reason)
+            elif action.origin == "diagnostic":
+                self.state.phase = "analyzing"
             elif record.observation.outcome in {"failed", "error"}:
                 self.state.phase = "analyzing"
             elif not self.state.pending_actions:

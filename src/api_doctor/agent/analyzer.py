@@ -31,12 +31,12 @@ class AppliedAnalysis:
 
 def build_analysis_prompt(
     state: AgentState,
-    failure: AgentActionRecord,
+    trigger: AgentActionRecord,
     catalog: OperationCatalog,
 ) -> dict[str, object]:
     """Expose evidence and capabilities, not authority to execute requests."""
     return {
-        "task": "Analyze the failed API action and choose one bounded next action.",
+        "task": "Analyze the latest API observation and choose one bounded next action.",
         "constraints": [
             "Base every hypothesis on the supplied observation and execution evidence.",
             "Choose continue_plan when a diagnostic would not distinguish plausible causes.",
@@ -49,7 +49,7 @@ def build_analysis_prompt(
             "A diagnostic workflow uses binding source=working_memory only for existing state, or source=workflow for an earlier extraction.",
             "The host validates every proposal and controls budgets and HTTP execution.",
         ],
-        "failed_action": failure.model_dump(mode="json"),
+        "triggering_action": trigger.model_dump(mode="json"),
         "working_memory": {
             "variables": [item.model_dump(mode="json") for item in state.variables],
             "hypotheses": [item.model_dump(mode="json") for item in state.hypotheses],
@@ -64,16 +64,16 @@ def build_analysis_prompt(
     }
 
 
-def analyze_failure(
+def analyze_observation(
     state: AgentState,
-    failure: AgentActionRecord,
+    trigger: AgentActionRecord,
     catalog: OperationCatalog,
     gateway: ModelGateway,
 ) -> ModelResponse[AnalysisDecision]:
     return gateway.complete(
-        build_analysis_prompt(state, failure, catalog),
+        build_analysis_prompt(state, trigger, catalog),
         response_model=AnalysisDecision,
-        trace_label="failure-analyzer",
+        trace_label="observation-analyzer",
     )
 
 
@@ -142,6 +142,7 @@ def apply_analysis_decision(
                 priority=100,
                 reason=decision.reason,
                 estimated_requests=1,
+                origin="diagnostic",
             )
             updated.pending_actions.insert(0, added_action)
             updated.plan_version += 1
@@ -187,6 +188,7 @@ def apply_analysis_decision(
                 priority=100,
                 reason=decision.reason,
                 estimated_requests=cost,
+                origin="diagnostic",
             )
             updated.pending_actions.insert(0, added_action)
             updated.plan_version += 1

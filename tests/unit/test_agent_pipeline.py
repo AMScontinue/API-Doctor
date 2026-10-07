@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class PipelineGateway:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.analysis_calls = 0
 
     def complete(self, prompt, *, response_model, trace_label):
         self.calls.append(trace_label)
@@ -71,7 +72,8 @@ class PipelineGateway:
                 }
             )
         elif response_model is AnalysisDecision:
-            value = AnalysisDecision.model_validate(
+            self.analysis_calls += 1
+            payload = (
                 {
                     "decision": "add_diagnostic_case",
                     "reason": "probe one declared not-found response",
@@ -87,7 +89,18 @@ class PipelineGateway:
                         "expected_status_codes": [404],
                     },
                 }
+                if self.analysis_calls == 1
+                else {
+                    "decision": "continue_plan",
+                    "reason": "the diagnostic result resolved the active hypothesis",
+                    "hypothesis": {
+                        "statement": "the diagnostic observation resolved the branch",
+                        "confidence": "high",
+                        "supporting_evidence": ["trajectory:actions/2"],
+                    },
+                }
             )
+            value = AnalysisDecision.model_validate(payload)
         else:
             raise AssertionError(f"unexpected response model: {response_model}")
         return ModelResponse(
@@ -175,20 +188,34 @@ def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkey
                 records=[AgentActionRecord(action=action, observation=observation)],
             )
 
-        assert state.pending_actions[0].item_id == "DIAG-unknown_user_probe"
+        action = state.pending_actions[0]
+        assert action.item_id == "DIAG-unknown_user_probe"
+        assert action.origin == "diagnostic"
         assert any(
             item.case.case_id == "DIAG-unknown_user_probe" for item in plan.cases
         )
         assert all(item.workflow_id != "unknown_user_probe" for item in workflows)
+        observation = AgentObservation(
+            action_kind="test_case",
+            action_id=action.item_id,
+            outcome="passed",
+            evidence_ref="trajectory:actions/2",
+            summary="diagnostic returned 404 as expected",
+            request_count=1,
+        )
         return AgentRun(
             state=state.model_copy(
                 deep=True,
                 update={
-                    "phase": "finished",
+                    "phase": "analyzing",
                     "pending_actions": [],
-                    "termination_reason": "diagnostic complete",
+                    "completed_actions": [*state.completed_actions, action],
+                    "observations": [*state.observations, observation],
+                    "remaining_test_budget": state.remaining_test_budget - 1,
+                    "remaining_step_budget": state.remaining_step_budget - 1,
                 },
-            )
+            ),
+            records=[AgentActionRecord(action=action, observation=observation)],
         )
 
     monkeypatch.setattr("api_doctor.agent.pipeline.run_agent_actions", fake_run)
@@ -205,7 +232,10 @@ def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkey
     )
 
     assert calls == 2
-    assert gateway.calls[-1] == "failure-analyzer"
+    assert gateway.calls[-1] == "observation-analyzer"
+    assert gateway.analysis_calls == 2
     assert result.run.analyses[0].applied_decision == "add_diagnostic_case"
+    assert result.run.analyses[1].applied_decision == "continue_plan"
     assert result.run.state.plan_version == 2
-    assert result.model_usage["failure_analyzer"].calls == 1
+    assert result.run.state.phase == "finished"
+    assert result.model_usage["analyzer"].calls == 2

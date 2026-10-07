@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from api_doctor.agent.analyzer import analyze_failure, apply_analysis_decision
+from api_doctor.agent.analyzer import analyze_observation, apply_analysis_decision
 from api_doctor.agent.models import (
     AnalysisRecord,
     AgentRun,
@@ -96,7 +96,7 @@ class AgentPipeline:
                 "semantic_discovery": semantic_response.telemetry,
                 "workflow_discovery": workflow_response.telemetry,
                 "initial_planner": planning_response.telemetry,
-                "failure_analyzer": analyzer_usage,
+                "analyzer": analyzer_usage,
                 "total": (
                     semantic_response.telemetry
                     + workflow_response.telemetry
@@ -140,7 +140,7 @@ class AgentPipeline:
                 state.termination_reason = "insufficient agent step budget for failure analysis"
                 break
 
-            response = analyze_failure(state, records[-1], catalog, self.gateway)
+            response = analyze_observation(state, records[-1], catalog, self.gateway)
             usage += response.telemetry
             application = apply_analysis_decision(
                 state,
@@ -167,6 +167,8 @@ class AgentPipeline:
                 )
             if application.diagnostic_workflow is not None:
                 active_workflows.append(application.diagnostic_workflow)
+            if state.phase != "executing":
+                break
 
         return AgentRun(state=state, records=records, analyses=analyses), usage
 
