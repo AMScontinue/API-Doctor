@@ -1358,6 +1358,7 @@ M2-C 工作流校验与编译当前实现状态（2026-10-06）：
 - 支持穿过 response Schema 的 `allOf/anyOf/oneOf` 和数组索引查找字段；编译结果按响应状态保存提取 Schema，并保存目标参数 Schema，使运行时可以用真实响应值再次验证，而不是只信任静态类型；
 - 重复 workflow id、同一步骤重复绑定同一目标、不存在的成功响应字段、错误参数/请求体字段及类型不兼容均会被拒绝；DELETE 步骤只产生 `requires_approval` 风险标记，不能授予执行权限；
 - 之前保存的真实 DeepSeek 产物中，用户 `create → read → delete` 和订单 `create → read` 两条工作流均通过确定性校验并编译；其中用户工作流因 DELETE 标记为需要批准。该验证不代表工作流已执行；真实变量提取与注入属于下一阶段 Agent Runner；
+- Workflow Gateway 只校验 JSON 外形和单字段类型；变量是否在提取前使用、step id/变量是否重复、`repeat=once` 是否有前置操作等跨步语义由确定性 workflow validator 逐条检查。因此单个候选的跨步错误会生成 rejected review，不会在 Gateway 阶段拖垮整批其他合法 workflow；
 - 当前单元测试使用手工构造的正确及对抗性提议，不依赖 prompt 示例，覆盖合法生命周期、批内错误隔离、未知 operation、只存在于错误响应的字段、错误参数位置、类型不兼容、重复绑定和重复 workflow id。
 
 M2-D 工作流运行时当前实现状态（2026-10-06）：
@@ -1402,6 +1403,11 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 - Workflow step 的 `assign` 可把 JSON 常量写入已声明的参数或顶层请求体字段，用于表达明确的状态转换等语义场景；常量必须通过目标 OpenAPI Schema 校验，且不能与同一步的变量绑定占用同一目标。执行器只消费校验后的 `CompiledAssignment`，不会执行模型生成代码。
 - 失败 Analyzer 已接入统一 Pipeline：运行时遇到 `failed/error` Observation 后暂停，DeepSeek 只能在 `continue_plan`、`add_diagnostic_case`、`add_diagnostic_workflow`、`revise_pending_actions`、`finish_investigation`、`finish_run` 中选择。单请求诊断使用 `DiagnosticCaseProposal`，只有 2–4 步且存在依赖的诊断才使用 Workflow DSL。
 - Analyzer 提议不能直接执行；诊断 case 会经 OpenAPI operation、参数/字段、Working Memory 变量、Schema、状态码、重复指纹、DELETE 审批和预算校验后编译为普通 `CompiledTestCase`；诊断 workflow 继续走原有确定性校验器。合法诊断插入队首并增加 `plan_version`，非法提议记录原因后回退原计划。
+- Analyzer prompt 中的 `budget_outlook` 由代码计算，明确列出当前分析成本、分析后可执行步数、pending 可信总成本，以及在保留一次诊断后复盘的前提下允许的最大诊断成本。因为每个 diagnostic Observation 都必须再次进入 Analyzer，确定性 validator 强制为这次后续分析保留 1 个 Agent step；不足时拒绝诊断，避免产生无法更新 hypothesis 的半截调查。
+- `revise_pending_actions` 仍只能保留和重排已经可信的 pending action。宿主按 LLM 给出的新顺序在剩余 request/step 双预算中确定性装箱，跳过放不下的 action 后继续尝试后续较小 action；裁剪结果记入 `AnalysisRecord.adjustments`，不会被误报为模型语义越权。
+- 一次真实 DeepSeek 小预算验证重用已保存的后端不可达 Observation，设置 `remaining_test_budget=2`、`remaining_step_budget=2` 并保留 1 个单请求 pending action。代码计算出 `max_diagnostic_request_cost_with_followup=0`；模型调用 1 次并选择 `continue_plan`，理由明确引用诊断配额为零且 pending action 仍可执行。宿主校验无错误，分析后剩余 1 个 Agent step；该验证未启动或访问被测后端。
+- `AnalysisDecision` 的类型校验强制 `new_hypothesis.status=open`，使模型直接生成 confirmed/rejected 新假设时在 Gateway 层进入一次结构修复，而不是到状态转移时才整个回滚。零诊断配额且无 pending action 时，模型可不携带 hypothesis 直接 `finish_run`；真实 failed Observation 仍保留在轨迹和报告中。
+- 两次真实 `confirm-conflict` HTTP 运行验证了预算闭环。在 `max_tests=10/max_steps=14` 时，初始 Planner 无 fallback，Agent 执行 6 个 Observation，两次调用 Analyzer，先添加 1 个诊断 case，再将 hypothesis 以 high confidence 确认，最终 request 预算为 0、step 预算为 1。在 `max_tests=5/max_steps=7` 时，初始 Planner 装入成本 `2+2+1` 的 3 个 action 并裁剪其余 2 个；confirm 失败后诊断配额为 0，Analyzer 保留 open hypothesis 并选择 `continue_plan`，最后一个独立用例消耗完剩余 request/step 预算。两次都无 Analyzer failure、无预算透支；完整轨迹保存在 `runs/m2/budget-confirm-conflict-room` 和 `runs/m2/budget-confirm-conflict-tight-v2`，精简事实摘要保存在 `benchmarks/m2/budget-management-summary.json`。
 - 单请求诊断同时支持从 Working Memory 绑定动态值和向已声明参数/顶层请求体字段赋予 JSON 常量；两者都按目标 Schema 校验，不能占用同一目标。它可直接表达“对已创建订单尝试一次明确状态转换”，不需要为了设置一个请求体值伪造成多步 workflow。
 - 单请求诊断可显式声明 `repeat=once`，仅当编译后的请求指纹已经执行且本次 run 尚未重放过该指纹时才允许执行；权限随校验后的 diagnostic `PlannedAction` 传递，运行时再次复核并记录 `repeated_fingerprints`。普通 action、未声明重复和同一指纹的第二次诊断重放仍会被阻断。
 - Analyzer 每轮消耗一个 Agent step，决策、假设、校验错误、新增 action 和移除的 pending action 写入 `checkpoint.json`、`trajectory.jsonl`、`run.json` 和 Markdown 报告。`revise_pending_actions` 只能选择、删除和重排当前可信队列中的 action，不能创造新测试或修改已编译请求；新增测试仍必须走诊断 DSL 和确定性编译。该能力属于局部 replan，不实现无边界的全量重规划。

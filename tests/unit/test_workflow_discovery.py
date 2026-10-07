@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
 
 from api_doctor.generation.workflow_discovery import (
     build_catalog_context,
@@ -98,9 +96,10 @@ def test_discovery_returns_typed_non_executable_proposals():
     }
 
 
-def test_workflow_rejects_variable_use_before_extraction():
+def test_discovery_parses_cross_step_errors_for_independent_validation():
     payload = _discovery().model_dump(mode="json")
     payload["workflows"][0]["steps"] = list(reversed(payload["workflows"][0]["steps"]))
 
-    with pytest.raises(ValidationError, match="used before it is extracted"):
-        WorkflowDiscovery.model_validate(payload)
+    discovery = WorkflowDiscovery.model_validate(payload)
+
+    assert discovery.workflows[0].steps[0].step_id == "get"

@@ -260,7 +260,9 @@ def _compile_workflow(
     catalog: OperationCatalog,
     working_memory: dict[str, object],
 ) -> tuple[CompiledWorkflow | None, list[str]]:
-    errors: list[str] = []
+    errors = _workflow_structure_errors(workflow)
+    if errors:
+        return None, errors
     variables: dict[str, list[ExtractionSchema]] = {}
     compiled_steps: list[CompiledWorkflowStep] = []
 
@@ -436,6 +438,44 @@ def _compile_workflow(
         ),
         [],
     )
+
+
+def _workflow_structure_errors(workflow: WorkflowCandidate) -> list[str]:
+    """Validate cross-step semantics independently for batch isolation."""
+    errors: list[str] = []
+    step_ids: set[str] = set()
+    available_variables: set[str] = set()
+    prior_operations: set[str] = set()
+    for step in workflow.steps:
+        if step.step_id in step_ids:
+            errors.append(f"duplicate step_id {step.step_id!r}")
+        step_ids.add(step.step_id)
+        for binding in step.bind:
+            if (
+                binding.source == "workflow"
+                and binding.variable not in available_variables
+            ):
+                errors.append(
+                    f"step {step.step_id!r} variable {binding.variable!r} "
+                    "is used before it is extracted"
+                )
+        for extraction in step.extract:
+            if extraction.variable in available_variables:
+                errors.append(f"duplicate variable {extraction.variable!r}")
+            available_variables.add(extraction.variable)
+        if step.repeat == "once":
+            if step.operation_id not in prior_operations:
+                errors.append(
+                    f"step {step.step_id!r} cannot repeat operation "
+                    f"{step.operation_id!r} before an earlier step uses it"
+                )
+            if step.expected_status_codes is None:
+                errors.append(
+                    f"step {step.step_id!r} must declare expected_status_codes "
+                    "when repeat=once"
+                )
+        prior_operations.add(step.operation_id)
+    return errors
 
 
 def validate_workflows(

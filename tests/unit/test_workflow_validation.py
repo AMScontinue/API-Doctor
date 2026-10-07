@@ -92,6 +92,17 @@ def test_rejects_unknown_operation_without_aborting_valid_workflow():
     assert "unknown operation" in result.reviews[0].errors[0]
 
 
+def test_rejects_variable_use_before_extraction_without_aborting_batch():
+    invalid_steps = list(reversed(_workflow().model_dump(mode="json")["steps"]))
+    result = _validate(
+        [_workflow(workflow_id="invalid_order", steps=invalid_steps), _workflow()]
+    )
+
+    assert result.summary()["accepted"] == 1
+    assert result.summary()["rejected"] == 1
+    assert "used before it is extracted" in result.reviews[0].errors[0]
+
+
 def test_rejects_pointer_missing_from_success_responses():
     steps = _workflow().model_dump(mode="json")["steps"]
     steps[0]["extract"][0]["response_expression"] = "$response.body#/error"

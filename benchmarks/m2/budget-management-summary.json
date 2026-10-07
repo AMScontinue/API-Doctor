@@ -1,0 +1,62 @@
+{
+  "date": "2026-10-08",
+  "service": "examples/buggy-shop",
+  "service_defects": ["confirm-conflict"],
+  "runs": [
+    {
+      "run_id": "6e8efca4-9883-4d60-b1ad-785c5f92e15b",
+      "artifact_directory": "runs/m2/budget-confirm-conflict-room",
+      "budgets": {
+        "max_tests": 10,
+        "max_steps": 14,
+        "remaining_tests": 0,
+        "remaining_steps": 1
+      },
+      "initial_planner": {
+        "used_fallback": false,
+        "accepted_actions": 5,
+        "adjustments": 0
+      },
+      "execution": {
+        "observations": 6,
+        "analyzer_calls": 2,
+        "diagnostic_actions_executed": 1,
+        "decisions": ["add_diagnostic_case", "finish_investigation"],
+        "final_hypothesis_status": "confirmed",
+        "termination_reason": "pending action queue exhausted"
+      }
+    },
+    {
+      "run_id": "2344cd41-1616-41bc-8079-48ad8f590b4f",
+      "artifact_directory": "runs/m2/budget-confirm-conflict-tight-v2",
+      "budgets": {
+        "max_tests": 5,
+        "max_steps": 7,
+        "remaining_tests": 0,
+        "remaining_steps": 0
+      },
+      "initial_planner": {
+        "used_fallback": false,
+        "accepted_action_costs": [2, 2, 1],
+        "omitted_actions": 2
+      },
+      "execution": {
+        "observations": 3,
+        "analyzer_calls": 1,
+        "diagnostic_actions_executed": 0,
+        "decisions": ["continue_plan"],
+        "final_hypothesis_status": "open",
+        "termination_reason": "pending action queue exhausted"
+      },
+      "budget_behavior": "The Analyzer observed zero diagnostic allowance, kept the hypothesis open, and spent the final request and Agent step on an independent pending test."
+    }
+  ],
+  "verified_capabilities": [
+    "initial LLM priority preserved under deterministic budget packing",
+    "diagnostic execution reserves one follow-up Analyzer step",
+    "diagnostic evidence updates and closes a hypothesis when budget permits",
+    "zero diagnostic allowance prevents an investigation that cannot be reviewed",
+    "remaining independent coverage can consume the final request and step budgets exactly",
+    "workflow semantic rejection is isolated per candidate"
+  ]
+}

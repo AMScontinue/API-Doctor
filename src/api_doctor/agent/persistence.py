@@ -199,5 +199,6 @@ def render_agent_report(run: AgentRun) -> str:
         for action in analysis.removed_actions:
             lines.append(f"- Removed pending action: `{action.kind}:{action.item_id}`")
         lines.extend(f"- Rejected by validator: {item}" for item in analysis.validation_errors)
+        lines.extend(f"- Budget adjustment: {item}" for item in analysis.adjustments)
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from api_doctor.agent.analyzer import (
     apply_analysis_decision,
     apply_analyzer_failure,
@@ -157,6 +159,23 @@ def test_valid_diagnostic_is_compiled_and_inserted_at_queue_front():
     assert applied.state.remaining_step_budget == 4
     assert applied.state.hypotheses[0].confidence == "medium"
     assert applied.state.pending_actions[0].hypothesis_id == "H-duplicate-email"
+
+
+def test_analysis_schema_rejects_a_new_hypothesis_that_skips_open_state():
+    with pytest.raises(ValueError, match="must start with status 'open'"):
+        AnalysisDecision.model_validate(
+            {
+                "decision": "finish_run",
+                "reason": "stop after a direct failure",
+                "new_hypothesis": {
+                    "hypothesis_id": "H-direct",
+                    "statement": "the observed operation violates its contract",
+                    "status": "confirmed",
+                    "confidence": "high",
+                    "supporting_evidence": ["trajectory:actions/1"],
+                },
+            }
+        )
 
 
 def test_single_step_diagnostic_can_bind_a_working_memory_variable():
@@ -381,8 +400,56 @@ def test_prompt_contains_real_failure_and_remaining_budgets():
 
     assert prompt["triggering_action"]["observation"]["outcome"] == "failed"
     assert prompt["working_memory"]["remaining_test_budget"] == 4
+    assert prompt["budget_outlook"] == {
+        "current_analysis_step_cost": 1,
+        "execution_steps_after_current_analysis": 4,
+        "diagnostic_followup_analysis_step_cost": 1,
+        "max_diagnostic_request_cost_with_followup": 3,
+        "pending_action_count": 1,
+        "pending_trusted_request_cost": 1,
+        "pending_fits_request_budget": True,
+        "pending_fits_execution_step_budget": True,
+    }
     assert prompt["evidence_registry"][0]["evidence_ref"] == "trajectory:actions/1"
     assert prompt["catalog"]["operations"]
+
+
+def test_rejects_diagnostic_that_cannot_leave_a_followup_analysis_step():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    state = _state(catalog)
+    state.remaining_step_budget = 2
+    decision = AnalysisDecision.model_validate(
+        {
+            "decision": "add_diagnostic_case",
+            "reason": "probe the resource once",
+            "new_hypothesis": {
+                "hypothesis_id": "H-resource",
+                "statement": "the resource may not exist",
+                "confidence": "medium",
+                "supporting_evidence": ["trajectory:actions/1"],
+            },
+            "diagnostic_hypothesis_id": "H-resource",
+            "diagnostic_case": {
+                "case_id": "probe_resource",
+                "operation_id": "getUser",
+                "purpose": "inspect the resource",
+                "expected_status_codes": [404],
+                "assignments": [
+                    {"location": "path", "name": "id", "value": 999999}
+                ],
+            },
+        }
+    )
+
+    applied = _apply(state, decision, catalog)
+
+    assert applied.record.applied_decision == "continue_plan"
+    assert applied.record.validation_errors == [
+        "diagnostic case cannot reserve one follow-up analysis step"
+    ]
+    assert applied.diagnostic_case is None
+    assert applied.state.hypotheses == []
+    assert applied.state.remaining_step_budget == 1
 
 
 def test_prompt_assigns_distinct_memory_keys_to_same_named_variables():
@@ -623,6 +690,47 @@ def test_revises_pending_queue_using_only_existing_trusted_actions():
     ]
     assert [item.item_id for item in applied.record.removed_actions] == ["TC-redundant"]
     assert applied.state.plan_version == 2
+
+
+def test_pending_revision_preserves_model_order_but_omits_over_budget_actions():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    state = _state(catalog)
+    state.remaining_test_budget = 1
+    state.remaining_step_budget = 3
+    state.pending_actions.insert(
+        0,
+        PlannedAction(
+            kind="workflow",
+            item_id="WF-expensive",
+            priority=90,
+            reason="high-value lifecycle",
+            estimated_requests=2,
+        ),
+    )
+    decision = AnalysisDecision.model_validate(
+        {
+            "decision": "revise_pending_actions",
+            "reason": "retain the most valuable work that still fits",
+            "pending_revision": {
+                "actions": [
+                    {"kind": "workflow", "item_id": "WF-expensive"},
+                    {"kind": "test_case", "item_id": "TC-pending"},
+                ],
+                "rationale": "prefer the lifecycle, then fall back to the compact probe",
+            },
+        }
+    )
+
+    applied = _apply(state, decision, catalog)
+
+    assert applied.record.validation_errors == []
+    assert applied.record.adjustments == [
+        "omitted over-budget pending action(s): ['WF-expensive']"
+    ]
+    assert [item.item_id for item in applied.state.pending_actions] == ["TC-pending"]
+    assert [item.item_id for item in applied.record.removed_actions] == [
+        "WF-expensive"
+    ]
 
 
 def test_rejects_pending_revision_that_invents_an_action():

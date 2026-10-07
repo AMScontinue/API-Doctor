@@ -86,3 +86,8 @@ blocked because it omitted the required `repeat=once`; this is a proposal
 quality limitation, not a service false positive. The duplicate-email run used
 a GET diagnostic to rule out non-persistence before confirming the uniqueness
 defect and resuming the remaining plan.
+
+The selected budget results are saved in `budget-management-summary.json`.
+They compare a run with enough room for a diagnostic plus follow-up analysis
+against a tight run where the Analyzer correctly leaves the hypothesis open,
+skips diagnosis, and spends the final budgets on independent coverage.

@@ -140,6 +140,8 @@ class AnalysisDecision(StrictModel):
             raise ValueError("pending_revision is required only for revise_pending_actions")
         if self.new_hypothesis is not None and self.hypothesis_update is not None:
             raise ValueError("an analysis decision cannot create and update a hypothesis together")
+        if self.new_hypothesis is not None and self.new_hypothesis.status != "open":
+            raise ValueError("a new hypothesis must start with status 'open'")
         expects_hypothesis = expected_case or expected_workflow
         if (self.diagnostic_hypothesis_id is not None) != expects_hypothesis:
             raise ValueError(
@@ -166,6 +168,7 @@ class AnalysisRecord(StrictModel):
         "finish_run",
     ]
     validation_errors: list[str] = Field(default_factory=list)
+    adjustments: list[str] = Field(default_factory=list)
     added_action: PlannedAction | None = None
     removed_actions: list[PlannedAction] = Field(default_factory=list)
     analyzer_error: str | None = None

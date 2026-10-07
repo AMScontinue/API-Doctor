@@ -58,6 +58,9 @@ def build_analysis_prompt(
             "A diagnostic case may use assignments for schema-valid constants required by one request; never bind and assign the same target.",
             "A diagnostic workflow uses binding source=working_memory only for existing state, or source=workflow for an earlier extraction.",
             "A diagnostic workflow may use assign for a schema-valid constant required by the experiment; never bind and assign the same target.",
+            "Every diagnostic result is analyzed again. Only propose a diagnostic whose trusted request cost fits max_diagnostic_request_cost_with_followup.",
+            "When the diagnostic allowance is zero, revise or continue the trusted pending plan, finish the investigation, or finish the run instead of proposing a diagnostic.",
+            "When the diagnostic allowance is zero and no pending action remains, finish_run may omit hypothesis fields; never create a confirmed new_hypothesis merely to justify stopping.",
             "The host validates every proposal and controls budgets and HTTP execution.",
         ],
         "triggering_action": trigger.model_dump(mode="json"),
@@ -73,6 +76,7 @@ def build_analysis_prompt(
             "pending_actions": [item.model_dump(mode="json") for item in state.pending_actions],
             "delete_approved": state.delete_approved,
         },
+        "budget_outlook": _budget_outlook(state),
         "evidence_registry": [
             {
                 "evidence_ref": item.evidence_ref,
@@ -85,6 +89,29 @@ def build_analysis_prompt(
         ],
         "catalog": build_catalog_context(catalog),
         "output_json_schema": AnalysisDecision.model_json_schema(),
+    }
+
+
+def _budget_outlook(state: AgentState) -> dict[str, object]:
+    """Explain trusted budget consequences without delegating arithmetic to the model."""
+    analysis_cost = 1
+    followup_analysis_cost = 1
+    execution_steps = max(state.remaining_step_budget - analysis_cost, 0)
+    diagnostic_step_allowance = max(execution_steps - followup_analysis_cost, 0)
+    diagnostic_request_allowance = min(
+        state.remaining_test_budget,
+        diagnostic_step_allowance,
+    )
+    pending_cost = sum(item.estimated_requests for item in state.pending_actions)
+    return {
+        "current_analysis_step_cost": analysis_cost,
+        "execution_steps_after_current_analysis": execution_steps,
+        "diagnostic_followup_analysis_step_cost": followup_analysis_cost,
+        "max_diagnostic_request_cost_with_followup": diagnostic_request_allowance,
+        "pending_action_count": len(state.pending_actions),
+        "pending_trusted_request_cost": pending_cost,
+        "pending_fits_request_budget": pending_cost <= state.remaining_test_budget,
+        "pending_fits_execution_step_budget": pending_cost <= execution_steps,
     }
 
 
@@ -147,6 +174,7 @@ def apply_analysis_decision(
     compiled_workflow: CompiledWorkflow | None = None
     added_action: PlannedAction | None = None
     removed_actions: list[PlannedAction] = []
+    adjustments: list[str] = []
     applied = decision.decision
     evidence_refs = {item.evidence_ref for item in candidate.observations}
 
@@ -254,8 +282,10 @@ def apply_analysis_decision(
             errors.append("diagnostic repeat=once requires an executed request fingerprint")
         if compiled_case is not None and candidate.remaining_test_budget < 1:
             errors.append("diagnostic case exceeds remaining request budget")
-        if compiled_case is not None and candidate.remaining_step_budget < 1:
-            errors.append("diagnostic case exceeds remaining agent step budget")
+        if compiled_case is not None and candidate.remaining_step_budget < 2:
+            errors.append(
+                "diagnostic case cannot reserve one follow-up analysis step"
+            )
 
         if errors:
             compiled_case = None
@@ -291,8 +321,13 @@ def apply_analysis_decision(
         cost = len(compiled_workflow.steps) if compiled_workflow is not None else 0
         if compiled_workflow is not None and cost > candidate.remaining_test_budget:
             errors.append("diagnostic workflow exceeds remaining request budget")
-        if compiled_workflow is not None and cost > candidate.remaining_step_budget:
-            errors.append("diagnostic workflow exceeds remaining agent step budget")
+        if (
+            compiled_workflow is not None
+            and cost + 1 > candidate.remaining_step_budget
+        ):
+            errors.append(
+                "diagnostic workflow cannot reserve one follow-up analysis step"
+            )
         known_ids = existing_workflow_ids or set()
         planned_ids = {
             item.item_id
@@ -332,8 +367,12 @@ def apply_analysis_decision(
         if unknown:
             errors.append(f"pending revision references unknown action(s) {unknown!r}")
         else:
-            revised = [pending[identity] for identity in requested]
-            retained = set(requested)
+            revised, adjustments = _fit_pending_revision(
+                [pending[identity] for identity in requested],
+                request_budget=candidate.remaining_test_budget,
+                step_budget=candidate.remaining_step_budget,
+            )
+            retained = {(item.kind, item.item_id) for item in revised}
             removed_actions = [
                 item
                 for item in candidate.pending_actions
@@ -357,6 +396,7 @@ def apply_analysis_decision(
         compiled_workflow = None
         added_action = None
         removed_actions = []
+        adjustments = []
     else:
         updated = candidate
 
@@ -379,6 +419,7 @@ def apply_analysis_decision(
             proposed=decision,
             applied_decision=applied,
             validation_errors=errors,
+            adjustments=adjustments,
             added_action=added_action,
             removed_actions=removed_actions,
         ),
@@ -393,3 +434,28 @@ def _unknown_evidence(hypothesis: object, known: set[str]) -> str | None:
         *getattr(hypothesis, "contradicting_evidence", []),
     ]
     return next((item for item in refs if item not in known), None)
+
+
+def _fit_pending_revision(
+    actions: list[PlannedAction],
+    *,
+    request_budget: int,
+    step_budget: int,
+) -> tuple[list[PlannedAction], list[str]]:
+    """Preserve model order while keeping only trusted actions that still fit."""
+    selected: list[PlannedAction] = []
+    omitted: list[str] = []
+    remaining_requests = request_budget
+    remaining_steps = step_budget
+    for action in actions:
+        cost = action.estimated_requests
+        if cost <= remaining_requests and cost <= remaining_steps:
+            selected.append(action)
+            remaining_requests -= cost
+            remaining_steps -= cost
+        else:
+            omitted.append(action.item_id)
+    adjustments = (
+        [f"omitted over-budget pending action(s): {omitted!r}"] if omitted else []
+    )
+    return selected, adjustments
