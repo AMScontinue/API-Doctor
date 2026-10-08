@@ -23,6 +23,15 @@ class PlannedAction(StrictModel):
     allow_repeat: bool = False
 
 
+class ApprovalRequest(StrictModel):
+    action_kind: Literal["test_case", "workflow"]
+    action_id: str
+    reason: str
+    methods: list[str] = Field(min_length=1)
+    operations: list[str] = Field(min_length=1)
+    targets: list[str] = Field(min_length=1)
+
+
 class InitialPlanProposal(StrictModel):
     strategy: str
     selected: list[PlannedAction] = Field(default_factory=list)
@@ -177,7 +186,9 @@ class AnalysisRecord(StrictModel):
 class AgentState(StrictModel):
     run_id: str = Field(default_factory=lambda: str(uuid4()))
     spec_fingerprint: str
-    phase: Literal["planning", "executing", "analyzing", "finished"] = "planning"
+    phase: Literal[
+        "planning", "executing", "awaiting_approval", "analyzing", "finished"
+    ] = "planning"
     plan_version: int = Field(default=1, ge=1)
     strategy: str
     pending_actions: list[PlannedAction]
@@ -188,9 +199,20 @@ class AgentState(StrictModel):
     remaining_test_budget: int = Field(ge=0)
     remaining_step_budget: int = Field(ge=0)
     delete_approved: bool = False
+    approved_action_ids: set[str] = Field(default_factory=set)
+    pending_approval: ApprovalRequest | None = None
     executed_fingerprints: set[str] = Field(default_factory=set)
     repeated_fingerprints: set[str] = Field(default_factory=set)
     termination_reason: str | None = None
+
+    @model_validator(mode="after")
+    def approval_matches_phase(self) -> "AgentState":
+        awaiting = self.phase == "awaiting_approval"
+        if awaiting != (self.pending_approval is not None):
+            raise ValueError(
+                "pending_approval is required exactly when phase is awaiting_approval"
+            )
+        return self
 
     def unambiguous_variables(self) -> dict[str, AgentVariable]:
         """Expose stable keys for every value without allowing ambiguous lookup."""

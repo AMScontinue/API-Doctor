@@ -18,7 +18,12 @@ from api_doctor.agent.models import (
     InitialPlanProposal,
 )
 from api_doctor.agent.planning import initialize_agent_state, propose_initial_plan
-from api_doctor.agent.runtime import CheckpointCallback, run_agent_actions
+from api_doctor.agent.runtime import (
+    ApprovalCallback,
+    ApprovalCheckpointCallback,
+    CheckpointCallback,
+    run_agent_actions,
+)
 from api_doctor.agent.reporting import ReportSynthesisResult, synthesize_report
 from api_doctor.execution.models import RunConfig
 from api_doctor.generation.semantic_discovery import SemanticDiscovery, discover_semantic_tests
@@ -72,6 +77,8 @@ class AgentPipeline:
         max_steps: int,
         checkpoint: CheckpointCallback | None = None,
         analysis_checkpoint: AnalysisCheckpointCallback | None = None,
+        approval_callback: ApprovalCallback | None = None,
+        approval_checkpoint: ApprovalCheckpointCallback | None = None,
     ) -> AgentPipelineResult:
         semantic_response = discover_semantic_tests(catalog, rules, self.gateway)
         plan = self._build_test_plan(catalog, rules, semantic_response.value, config)
@@ -89,6 +96,8 @@ class AgentPipeline:
             config,
             checkpoint,
             analysis_checkpoint,
+            approval_callback,
+            approval_checkpoint,
         )
         reporting = synthesize_report(
             run,
@@ -132,6 +141,8 @@ class AgentPipeline:
         config: RunConfig,
         checkpoint: CheckpointCallback | None,
         analysis_checkpoint: AnalysisCheckpointCallback | None,
+        approval_callback: ApprovalCallback | None,
+        approval_checkpoint: ApprovalCheckpointCallback | None,
     ) -> tuple[AgentRun, ModelCallTelemetry]:
         records = []
         analyses: list[AnalysisRecord] = []
@@ -147,6 +158,8 @@ class AgentPipeline:
                 catalog,
                 config,
                 checkpoint=checkpoint,
+                approval_callback=approval_callback,
+                approval_checkpoint=approval_checkpoint,
             )
             state = segment.state
             records.extend(segment.records)
@@ -231,6 +244,7 @@ class AgentPipeline:
             max_tests=config.max_tests,
             max_steps=max_steps,
             delete_approved=config.approve_delete,
+            allow_delete_selection=config.interactive_approval,
             gateway=self.gateway,
         )
         planning = initialize_agent_state(
@@ -241,5 +255,6 @@ class AgentPipeline:
             max_tests=config.max_tests,
             max_steps=max_steps,
             delete_approved=config.approve_delete,
+            allow_delete_selection=config.interactive_approval,
         )
         return response, planning

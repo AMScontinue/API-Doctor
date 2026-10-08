@@ -7,6 +7,7 @@ from hashlib import sha256
 from typing import Literal
 
 from api_doctor.agent.models import (
+    ApprovalRequest,
     AgentActionRecord,
     AgentObservation,
     AgentRun,
@@ -25,6 +26,8 @@ from api_doctor.workflows.validation import CompiledWorkflow
 
 
 CheckpointCallback = Callable[[AgentState, AgentActionRecord], None]
+ApprovalCallback = Callable[[ApprovalRequest], bool]
+ApprovalCheckpointCallback = Callable[[AgentState, ApprovalRequest, bool | None], None]
 
 
 class AgentRuntimeError(ValueError):
@@ -40,6 +43,8 @@ class _AgentRunner:
         catalog: OperationCatalog,
         config: RunConfig,
         checkpoint: CheckpointCallback | None,
+        approval_callback: ApprovalCallback | None,
+        approval_checkpoint: ApprovalCheckpointCallback | None,
     ) -> None:
         if state.spec_fingerprint != catalog.fingerprint:
             raise AgentRuntimeError("AgentState OpenAPI fingerprint does not match the catalog")
@@ -47,14 +52,11 @@ class _AgentRunner:
         self.catalog = catalog
         self.config = config
         self.checkpoint = checkpoint
+        self.approval_callback = approval_callback
+        self.approval_checkpoint = approval_checkpoint
         self.cases = {item.case.case_id: item for item in plan.cases}
         self.workflows = {item.workflow_id: item for item in workflows}
         self.records: list[AgentActionRecord] = []
-        self.policy = ExecutionPolicy(
-            base_url=config.base_url,
-            approve_delete=config.approve_delete and state.delete_approved,
-            timeout_seconds=config.timeout_seconds,
-        )
         self.action_offset = len(state.observations)
 
     def run(self) -> AgentRun:
@@ -82,6 +84,10 @@ class _AgentRunner:
             elif trusted_cost > self.state.remaining_step_budget:
                 self._finish("remaining agent step budget cannot execute the next action")
                 break
+            elif self._requires_approval(action) and not self._action_approved(action):
+                record = self._request_approval(action)
+                if record is None:
+                    break
             else:
                 record = self._execute(
                     action, self.action_offset + len(self.records) + 1
@@ -113,6 +119,93 @@ class _AgentRunner:
                 self.checkpoint(self.state.model_copy(deep=True), record)
 
         return AgentRun(state=self.state, records=self.records)
+
+    def _request_approval(self, action: PlannedAction) -> AgentActionRecord | None:
+        request = self._approval_request(action)
+        self.state.phase = "awaiting_approval"
+        self.state.pending_approval = request
+        if self.approval_checkpoint is not None:
+            self.approval_checkpoint(self.state.model_copy(deep=True), request, None)
+        if self.approval_callback is None:
+            return None
+
+        approved = self.approval_callback(request)
+        self.state.phase = "executing"
+        self.state.pending_approval = None
+        if approved:
+            self.state.approved_action_ids.add(_approval_key(action))
+        if self.approval_checkpoint is not None:
+            self.approval_checkpoint(
+                self.state.model_copy(deep=True), request, approved
+            )
+        if approved:
+            return self._execute(
+                action, self.action_offset + len(self.records) + 1
+            )
+        return self._approval_rejected(
+            action, self.action_offset + len(self.records) + 1
+        )
+
+    def _requires_approval(self, action: PlannedAction) -> bool:
+        if action.kind == "test_case":
+            planned = self.cases.get(action.item_id)
+            return bool(planned and planned.case.risk == "requires_approval")
+        workflow = self.workflows.get(action.item_id)
+        return bool(workflow and workflow.requires_approval)
+
+    def _action_approved(self, action: PlannedAction) -> bool:
+        return self.state.delete_approved or _approval_key(action) in self.state.approved_action_ids
+
+    def _approval_request(self, action: PlannedAction) -> ApprovalRequest:
+        if action.kind == "test_case":
+            case = self.cases[action.item_id].case
+            methods = [case.request.method]
+            operations = [case.operation_id]
+            targets = [f"{case.request.method} {case.request.path_template}"]
+        else:
+            workflow = self.workflows[action.item_id]
+            destructive = [step for step in workflow.steps if step.method == "DELETE"]
+            methods = [step.method for step in destructive]
+            operations = [step.operation_id for step in destructive]
+            targets = [
+                f"{step.method} {self.catalog.get(step.operation_id).path}"
+                for step in destructive
+            ]
+        return ApprovalRequest(
+            action_kind=action.kind,
+            action_id=action.item_id,
+            reason="validated action contains an HTTP DELETE request",
+            methods=methods,
+            operations=operations,
+            targets=targets,
+        )
+
+    def _approval_rejected(
+        self,
+        action: PlannedAction,
+        action_number: int,
+    ) -> AgentActionRecord:
+        reason = "human rejected DELETE approval"
+        return AgentActionRecord(
+            action=action,
+            observation=AgentObservation(
+                action_kind=action.kind,
+                action_id=action.item_id,
+                outcome="blocked",
+                evidence_ref=f"trajectory:actions/{action_number}",
+                summary=f"{action.kind} {action.item_id!r} was not executed: {reason}",
+                request_count=0,
+                agent_steps=1,
+                violations=[reason],
+            ),
+        )
+
+    def _policy(self, action: PlannedAction) -> ExecutionPolicy:
+        return ExecutionPolicy(
+            base_url=self.config.base_url,
+            approve_delete=self._action_approved(action),
+            timeout_seconds=self.config.timeout_seconds,
+        )
 
     def _trusted_cost(self, action: PlannedAction) -> int | None:
         if action.kind == "test_case":
@@ -162,7 +255,7 @@ class _AgentRunner:
 
         result = execute_case(
             case,
-            self.policy,
+            self._policy(action),
             operation=self.catalog.get(case.operation_id),
         )
         fingerprints = [fingerprint] if result.request_url is not None else []
@@ -213,7 +306,7 @@ class _AgentRunner:
                 seed=_action_seed(self.config.seed, action),
                 time_anchor=self.config.time_anchor,
                 max_tests=min(action.estimated_requests, self.state.remaining_test_budget),
-                approve_delete=self.config.approve_delete and self.state.delete_approved,
+                approve_delete=self._action_approved(action),
                 timeout_seconds=self.config.timeout_seconds,
             ),
             seen_fingerprints=(
@@ -330,6 +423,10 @@ def _action_seed(base_seed: int, action: PlannedAction) -> int:
     return int.from_bytes(sha256(identity).digest()[:8], "big")
 
 
+def _approval_key(action: PlannedAction) -> str:
+    return f"{action.kind}:{action.item_id}"
+
+
 def run_agent_actions(
     state: AgentState,
     plan: FinalTestPlan,
@@ -338,6 +435,17 @@ def run_agent_actions(
     config: RunConfig,
     *,
     checkpoint: CheckpointCallback | None = None,
+    approval_callback: ApprovalCallback | None = None,
+    approval_checkpoint: ApprovalCheckpointCallback | None = None,
 ) -> AgentRun:
     """Consume pending actions until completion or an observation requires analysis."""
-    return _AgentRunner(state, plan, workflows, catalog, config, checkpoint).run()
+    return _AgentRunner(
+        state,
+        plan,
+        workflows,
+        catalog,
+        config,
+        checkpoint,
+        approval_callback,
+        approval_checkpoint,
+    ).run()

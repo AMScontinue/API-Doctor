@@ -43,6 +43,7 @@ class RunConfig(RunModel):
     time_anchor: datetime
     max_tests: int = Field(gt=0)
     approve_delete: bool = False
+    interactive_approval: bool = False
     timeout_seconds: float = Field(default=5.0, gt=0)
 
 

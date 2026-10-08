@@ -394,6 +394,37 @@ def test_unapproved_delete_workflow_is_absent_from_inventory_and_fallback():
     assert {item["item_id"] for item in prompt["workflows"]} == {"create_read_user"}
 
 
+def test_interactive_mode_exposes_delete_without_preapproving_it():
+    catalog, plan, workflows = _inputs()
+    dangerous = workflows[0].model_copy(
+        deep=True,
+        update={"workflow_id": "dangerous_cleanup", "requires_approval": True},
+    )
+    proposal = _proposal(item_id="dangerous_cleanup")
+
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=plan,
+        workflows=[dangerous],
+        proposed_plan=proposal,
+        max_tests=3,
+        max_steps=4,
+        allow_delete_selection=True,
+    )
+    prompt = build_initial_plan_prompt(
+        plan,
+        [dangerous],
+        max_tests=3,
+        max_steps=4,
+        allow_delete_selection=True,
+    )
+
+    assert result.used_fallback is False
+    assert result.state.pending_actions[0].item_id == "dangerous_cleanup"
+    assert result.state.delete_approved is False
+    assert {item["item_id"] for item in prompt["workflows"]} == {"dangerous_cleanup"}
+
+
 def test_unapproved_delete_test_case_is_absent_from_prompt_and_fallback():
     catalog, plan, workflows = _inputs()
     delete_case = plan.cases[0].model_copy(

@@ -1377,7 +1377,9 @@ M2-E AgentState 与初始 Planner 当前实现状态（2026-10-06）：
 - 已定义显式单次运行 `AgentState`，保存 phase、plan version、pending/completed actions、Observation、Hypothesis、请求预算、Agent step 预算、已执行指纹、DELETE 批准状态和终止原因；当前阶段只初始化状态，尚未执行统一队列；
 - `api-doctor plan-agent` 将已融合的 `FinalTestPlan` 和已校验的 `CompiledWorkflow` 以精简 inventory 交给 DeepSeek；模型只能选择现有 `test_case/workflow item_id`、优先级、理由和估算请求数，不能生成 URL、请求体、operation 或断言；
 - 初始规划本身消耗一个 Agent step。LLM 负责给出可信 action 的价值排序，代码按 inventory 重新计算 workflow step 数和单用例成本，不信任模型的预算算术；超过 `max_tests` 或剩余 Agent step 预算时，宿主按模型顺序保留能装入的高价值 action，并将成本修正与裁剪记录为 adjustments。无效结构仍由 Gateway 最多修复一次；伪造 ID、未批准危险引用或空计划才触发确定性 fallback；
-- 未显式批准 DELETE 时，危险工作流既不会发送给 Planner，也不会进入 fallback；批准状态写入 AgentState，但真正执行时仍需通过 HTTP safety policy 再检查一次；
+- 默认非交互模式下，未显式批准 DELETE 时，危险工作流既不会发送给 Planner，也不会进入 fallback；批准状态写入 AgentState，但真正执行时仍需通过 HTTP safety policy 再检查一次；
+- CLI Human-in-the-loop 模式使用 `--interactive-approval` 允许经校验的 DELETE test/workflow 进入 Planner，但不予先授权。运行时在首个危险请求前将 phase 切为 `awaiting_approval`，把 action kind/id、operation 与 method/path 写入 checkpoint/trajectory 后才询问用户。approve 只把当前可信 action identity 加入 `approved_action_ids`，执行时 HTTP safety policy 再次检查；reject 不发 HTTP，产生 blocked Observation 并继续队列。`--approve-delete` 保留为非交互全局预批准，两种模式互斥；本阶段不声称支持跨进程 resume；
+- 真实 CLI 验证中，可信 `user_create_read_delete` workflow 在发送任何步骤前显示 `DELETE /users/{id}` 审批提示；用户输入 `n` 后，trajectory 依次保存 `approval_requested` 和 `approval_decided=false`，该 action 产生 `blocked` Observation，`request_count=0`，后续队列继续执行。原始运行产物保存在 gitignored `runs/m2/hitl-reject-actions`；
 - 单元测试使用 FakeGateway 和真实编译产物覆盖紧凑上下文、有效状态初始化、伪造 ID、成本谎报、预算溢出和未批准 DELETE 隔离，不在 prompt 中预写选择答案；
 - 一次真实 DeepSeek Planner 在 8 请求、10 Agent step 预算下选择 1 个两步 `order_create_read` workflow 和 6 个可信单接口用例，总成本 8，引用与成本校验全部通过，无 fallback；调用 1 次、模型耗时 3,034 ms、prompt 2,827 tokens、completion 569 tokens。该数据仅对应当前保存 inventory、模型和本次运行；
 - 开发验证中的另一次真实调用里，模型文字声称成本为 8、结构化选择实际成本为 9，确定性校验成功拒绝并触发 fallback；该次临时产物后来被最终验证覆盖，因此只作为开发观察，不作为保存运行指标；

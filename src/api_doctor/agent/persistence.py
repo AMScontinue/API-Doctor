@@ -7,7 +7,13 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from api_doctor.agent.models import AnalysisRecord, AgentActionRecord, AgentRun, AgentState
+from api_doctor.agent.models import (
+    AnalysisRecord,
+    AgentActionRecord,
+    AgentRun,
+    AgentState,
+    ApprovalRequest,
+)
 from api_doctor.agent.pipeline import AgentPipelineResult
 from api_doctor.agent.reporting import ReportSynthesisResult
 from api_doctor.observability import redact
@@ -75,6 +81,36 @@ class AgentArtifactStore:
             "analysis": record.model_dump(mode="json"),
             "remaining_test_budget": state.remaining_test_budget,
             "remaining_step_budget": state.remaining_step_budget,
+        }
+        with self.trajectory_path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(redact(event), ensure_ascii=False) + "\n")
+
+    def checkpoint_approval(
+        self,
+        state: AgentState,
+        request: ApprovalRequest,
+        approved: bool | None,
+    ) -> None:
+        payload = redact(
+            {
+                "state": state.model_dump(mode="json"),
+                "pending_approval": request.model_dump(mode="json"),
+                "approval_decision": approved,
+            }
+        )
+        temporary = self.checkpoint_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(self.checkpoint_path)
+        event = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "approval_requested" if approved is None else "approval_decided",
+            "run_id": state.run_id,
+            "phase": state.phase,
+            "approval": request.model_dump(mode="json"),
+            "approved": approved,
         }
         with self.trajectory_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(redact(event), ensure_ascii=False) + "\n")
@@ -160,9 +196,25 @@ def render_agent_report(
         f"- Remaining Agent step budget: `{state.remaining_step_budget}`",
         f"- Termination reason: `{state.termination_reason}`",
         "",
-        "## Observations",
+        "## Pending approval",
         "",
     ]
+    if state.pending_approval is None:
+        lines.append("No action is awaiting approval.")
+    else:
+        lines.extend(
+            [
+                f"- Action: `{state.pending_approval.action_kind}:"
+                f"{state.pending_approval.action_id}`",
+                f"- Reason: {state.pending_approval.reason}",
+                *[f"- Target: `{target}`" for target in state.pending_approval.targets],
+            ]
+        )
+    lines.extend([
+        "",
+        "## Observations",
+        "",
+    ])
     if not state.observations:
         lines.append("No action was executed.")
     for observation in state.observations:

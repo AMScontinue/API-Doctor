@@ -134,12 +134,24 @@ def test_pipeline_passes_in_memory_state_directly_to_runtime(monkeypatch, tmp_pa
     gateway = PipelineGateway()
     captured = {}
 
-    def fake_run(state, plan, workflows, actual_catalog, config, *, checkpoint=None):
+    def fake_run(
+        state,
+        plan,
+        workflows,
+        actual_catalog,
+        config,
+        *,
+        checkpoint=None,
+        approval_callback=None,
+        approval_checkpoint=None,
+    ):
         captured["state"] = state
         captured["plan"] = plan
         assert actual_catalog is catalog
         assert workflows == []
         assert checkpoint is None
+        assert approval_callback is None
+        assert approval_checkpoint is None
         return AgentRun(state=state.model_copy(update={"phase": "finished"}))
 
     monkeypatch.setattr("api_doctor.agent.pipeline.run_agent_actions", fake_run)
@@ -179,9 +191,19 @@ def test_pipeline_analyzes_failure_and_executes_validated_diagnostic_case(monkey
     gateway = PipelineGateway()
     calls = 0
 
-    def fake_run(state, plan, workflows, actual_catalog, config, *, checkpoint=None):
+    def fake_run(
+        state,
+        plan,
+        workflows,
+        actual_catalog,
+        config,
+        *,
+        checkpoint=None,
+        approval_callback=None,
+        approval_checkpoint=None,
+    ):
         nonlocal calls
-        del config, checkpoint
+        del config, checkpoint, approval_callback, approval_checkpoint
         calls += 1
         assert actual_catalog is catalog
         if calls == 1:
@@ -276,9 +298,19 @@ def test_pipeline_falls_back_when_analyzer_call_fails(monkeypatch):
     gateway = PipelineGateway(fail_analyzer=True)
     runtime_calls = 0
 
-    def fake_run(state, plan, workflows, actual_catalog, config, *, checkpoint=None):
+    def fake_run(
+        state,
+        plan,
+        workflows,
+        actual_catalog,
+        config,
+        *,
+        checkpoint=None,
+        approval_callback=None,
+        approval_checkpoint=None,
+    ):
         nonlocal runtime_calls
-        del plan, workflows, config, checkpoint
+        del plan, workflows, config, checkpoint, approval_callback, approval_checkpoint
         runtime_calls += 1
         assert actual_catalog is catalog
         if runtime_calls == 1:

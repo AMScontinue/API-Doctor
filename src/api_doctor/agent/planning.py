@@ -86,7 +86,9 @@ def build_initial_plan_prompt(
     max_tests: int,
     max_steps: int,
     delete_approved: bool = False,
+    allow_delete_selection: bool = False,
 ) -> dict[str, object]:
+    include_delete = delete_approved or allow_delete_selection
     executable_step_budget = max(max_steps - 1, 0)
     return {
         "task": "Select and prioritize trusted API tests for the initial agent plan. Reference only supplied item IDs; do not create requests, operations, assertions, or URLs.",
@@ -103,9 +105,9 @@ def build_initial_plan_prompt(
             "DELETE actions require human approval; selection does not grant approval.",
             "Use only the provided item_id values and matching kind.",
         ],
-        "test_cases": _case_context(plan, delete_approved),
+        "test_cases": _case_context(plan, include_delete),
         "workflows": _workflow_context(
-            [item for item in workflows if delete_approved or not item.requires_approval]
+            [item for item in workflows if include_delete or not item.requires_approval]
         ),
         "output_json_schema": InitialPlanProposal.model_json_schema(),
     }
@@ -118,6 +120,7 @@ def propose_initial_plan(
     max_tests: int,
     max_steps: int,
     delete_approved: bool = False,
+    allow_delete_selection: bool = False,
     gateway: ModelGateway,
 ) -> ModelResponse[InitialPlanProposal]:
     return gateway.complete(
@@ -126,7 +129,7 @@ def propose_initial_plan(
             workflows,
             max_tests=max_tests,
             max_steps=max_steps,
-            delete_approved=delete_approved,
+            delete_approved=delete_approved or allow_delete_selection,
         ),
         response_model=InitialPlanProposal,
         trace_label="initial-planner",
@@ -387,6 +390,7 @@ def initialize_agent_state(
     max_tests: int,
     max_steps: int,
     delete_approved: bool = False,
+    allow_delete_selection: bool = False,
 ) -> InitialPlanningResult:
     if max_tests < 1:
         raise ValueError("max_tests must be at least 1")
@@ -394,8 +398,16 @@ def initialize_agent_state(
         raise ValueError("max_steps must be at least 1")
     prepared, errors, adjustments = _prepare_proposal(
         proposed_plan,
-        _inventory(plan, workflows, delete_approved=delete_approved),
-        _coverage_inventory(plan, workflows, delete_approved=delete_approved),
+        _inventory(
+            plan,
+            workflows,
+            delete_approved=delete_approved or allow_delete_selection,
+        ),
+        _coverage_inventory(
+            plan,
+            workflows,
+            delete_approved=delete_approved or allow_delete_selection,
+        ),
         max_tests=max_tests,
         max_steps=max_steps,
     )
@@ -405,7 +417,7 @@ def initialize_agent_state(
             workflows,
             max_tests=max_tests,
             max_steps=max_steps,
-            delete_approved=delete_approved,
+            delete_approved=delete_approved or allow_delete_selection,
         )
         if errors
         else prepared

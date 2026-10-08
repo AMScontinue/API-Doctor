@@ -49,6 +49,7 @@ def run_config(args: argparse.Namespace, *, max_tests: int | None = None) -> Run
         time_anchor=datetime.fromisoformat(args.time_anchor),
         max_tests=max_tests if max_tests is not None else args.max_tests,
         approve_delete=args.approve_delete,
+        interactive_approval=getattr(args, "interactive_approval", False),
         timeout_seconds=args.timeout,
     )
 

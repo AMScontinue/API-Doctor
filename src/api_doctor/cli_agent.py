@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from api_doctor.agent.models import AgentRun
+from api_doctor.agent.models import AgentRun, ApprovalRequest
 from api_doctor.agent.persistence import AgentArtifactStore
 from api_doctor.agent.pipeline import AgentPipeline
 from api_doctor.agent.planning import initialize_agent_state, propose_initial_plan
@@ -52,7 +52,7 @@ def add_agent_commands(commands: Any) -> None:
     actions.add_argument("--test-plan", type=Path, required=True)
     actions.add_argument("--workflows", type=Path, required=True)
     _add_http_options(actions)
-    actions.add_argument("--approve-delete", action="store_true")
+    _add_approval_options(actions)
 
     run = commands.add_parser(
         "agent-run",
@@ -88,6 +88,7 @@ def _plan_agent(args: argparse.Namespace, catalog: OperationCatalog) -> None:
         max_tests=args.max_tests,
         max_steps=args.max_steps,
         delete_approved=args.approve_delete,
+        allow_delete_selection=args.interactive_approval,
         gateway=gateway,
     )
     result = initialize_agent_state(
@@ -98,6 +99,7 @@ def _plan_agent(args: argparse.Namespace, catalog: OperationCatalog) -> None:
         max_tests=args.max_tests,
         max_steps=args.max_steps,
         delete_approved=args.approve_delete,
+        allow_delete_selection=args.interactive_approval,
     )
     write_json(
         {
@@ -118,6 +120,8 @@ def _run_actions(args: argparse.Namespace, catalog: OperationCatalog) -> None:
         catalog,
         run_config(args, max_tests=max(state.remaining_test_budget, 1)),
         checkpoint=store.checkpoint,
+        approval_callback=_approval_prompt if args.interactive_approval else None,
+        approval_checkpoint=store.checkpoint_approval,
     )
     _print_run(run, store.finalize(run))
 
@@ -131,6 +135,8 @@ def _run_pipeline(args: argparse.Namespace, catalog: OperationCatalog) -> None:
         max_steps=args.max_steps,
         checkpoint=store.checkpoint,
         analysis_checkpoint=store.checkpoint_analysis,
+        approval_callback=_approval_prompt if args.interactive_approval else None,
+        approval_checkpoint=store.checkpoint_approval,
     )
     artifacts = store.finalize_pipeline(result)
     write_json(
@@ -144,6 +150,11 @@ def _run_pipeline(args: argparse.Namespace, catalog: OperationCatalog) -> None:
                 item.analyzer_error is not None for item in result.run.analyses
             ),
             "termination_reason": result.run.state.termination_reason,
+            "pending_approval": (
+                result.run.state.pending_approval.model_dump(mode="json")
+                if result.run.state.pending_approval
+                else None
+            ),
             "model_usage": {
                 name: asdict(usage) for name, usage in result.model_usage.items()
             },
@@ -161,6 +172,11 @@ def _print_run(run: AgentRun, artifacts: dict[str, Path]) -> None:
             "remaining_test_budget": run.state.remaining_test_budget,
             "remaining_step_budget": run.state.remaining_step_budget,
             "termination_reason": run.state.termination_reason,
+            "pending_approval": (
+                run.state.pending_approval.model_dump(mode="json")
+                if run.state.pending_approval
+                else None
+            ),
             "artifacts": {name: str(path) for name, path in artifacts.items()},
         }
     )
@@ -175,7 +191,35 @@ def _gateway(log_level: str) -> DeepSeekGateway:
 def _add_agent_limits(command: argparse.ArgumentParser) -> None:
     command.add_argument("--max-tests", type=int, default=10)
     command.add_argument("--max-steps", type=int, default=20)
-    command.add_argument("--approve-delete", action="store_true")
+    _add_approval_options(command)
+
+
+def _add_approval_options(command: argparse.ArgumentParser) -> None:
+    approval = command.add_mutually_exclusive_group()
+    approval.add_argument(
+        "--approve-delete",
+        action="store_true",
+        help="pre-approve all validated DELETE actions for non-interactive runs",
+    )
+    approval.add_argument(
+        "--interactive-approval",
+        action="store_true",
+        help="pause before each validated DELETE action and ask for approval",
+    )
+
+
+def _approval_prompt(request: ApprovalRequest) -> bool:
+    print("\nDELETE approval required")
+    print(f"Action: {request.action_kind}:{request.action_id}")
+    for target in request.targets:
+        print(f"Target: {target}")
+    while True:
+        answer = input("Approve this action? [y/N]: ").strip().lower()
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"", "n", "no"}:
+            return False
+        print("Please answer 'y' or 'n'.")
 
 
 def _add_http_options(command: argparse.ArgumentParser) -> None:

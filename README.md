@@ -157,6 +157,21 @@ Workflow step 可选声明 `expected_status_codes`，但只能使用该 operatio
   --output runs/m2/agent-run
 ```
 
+需要测试 DELETE 时可以开启 CLI Human-in-the-loop：
+
+```bash
+.venv/bin/api-doctor agent-run \
+  --spec examples/buggy-shop/openapi.yaml \
+  --rules examples/buggy-shop/rules.yaml \
+  --base-url http://127.0.0.1:18080 \
+  --max-tests 12 \
+  --max-steps 20 \
+  --interactive-approval \
+  --output runs/m2/agent-hitl
+```
+
+DELETE action 会先进入 `awaiting_approval`，并在终端显示经校验的 action ID 和 method/path。审批请求会在询问用户前写入 `checkpoint.json` 和 `trajectory.jsonl`；批准只授权当前 action，拒绝则产生零 HTTP 请求的 blocked Observation 并继续计划。`--approve-delete` 仍是非交互场景的全局预批准；两个选项互斥。跨进程恢复待后续 checkpoint resume 阶段实现。
+
 当前闭环覆盖 LLM 语义候选发现、确定性测试计划构建、LLM workflow 发现与校验、LLM 初始规划、真实 HTTP 执行、Observation 分析、受限诊断、局部 replan、状态更新和最终 LLM 证据总结。`pipeline.json` 保存脱敏后的发现、校验、计划、报告分析和分阶段模型用量，`run.json` 保存执行结果，`report-analysis.json` 保存经证据引用校验的类型化总结，`report.md` 同时保留事实记录和最终分析。运行目录必须为空，程序不会覆盖已有运行。
 
 Planner 的 LLM 输出是价值排序，最终预算装箱由确定性代码完成。为避免昂贵 workflow 或同类边界测试挤掉所有其他覆盖，宿主保留语义规则、状态型 workflow、format、heuristic 和契约负向等最低覆盖，再按模型原排序填充余下预算。这些调整只能引用已校验 inventory，并全部写入 planning `adjustments`。

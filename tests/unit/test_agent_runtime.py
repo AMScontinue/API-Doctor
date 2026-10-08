@@ -103,6 +103,41 @@ def _config(max_tests=5):
     )
 
 
+def _delete_workflow(catalog):
+    candidate = WorkflowCandidate.model_validate(
+        {
+            "workflow_id": "create_delete_user",
+            "purpose": "create then delete one user",
+            "confidence": "high",
+            "reasoning": "delete the resource created by the first step",
+            "steps": [
+                {
+                    "step_id": "create",
+                    "operation_id": "createUser",
+                    "purpose": "create user",
+                    "extract": [
+                        {
+                            "variable": "user_id",
+                            "response_expression": "$response.body#/id",
+                        }
+                    ],
+                },
+                {
+                    "step_id": "delete",
+                    "operation_id": "deleteUser",
+                    "purpose": "delete user",
+                    "bind": [
+                        {"location": "path", "name": "id", "variable": "user_id"}
+                    ],
+                },
+            ],
+        }
+    )
+    workflow = validate_workflows([candidate], catalog).reviews[0].compiled_workflow
+    assert workflow is not None and workflow.requires_approval
+    return workflow
+
+
 def _fake_pass(case, policy, operation=None):
     del policy
     status = case.assertions[0].allowed[0]
@@ -162,6 +197,107 @@ def test_artifact_store_refuses_to_overwrite_existing_run(tmp_path):
         AgentArtifactStore(output)
 
     assert trajectory.read_text(encoding="utf-8") == "existing event\n"
+
+
+def test_delete_action_pauses_with_a_persisted_approval_request(tmp_path):
+    catalog, plan, _ = _inputs()
+    workflow = _delete_workflow(catalog)
+    action = PlannedAction(
+        kind="workflow",
+        item_id=workflow.workflow_id,
+        priority=90,
+        reason="lifecycle cleanup",
+        estimated_requests=2,
+    )
+    store = AgentArtifactStore(tmp_path / "approval-pause")
+
+    run = run_agent_actions(
+        _state(catalog, plan, [action]),
+        plan,
+        [workflow],
+        catalog,
+        _config(),
+        approval_checkpoint=store.checkpoint_approval,
+    )
+
+    assert run.state.phase == "awaiting_approval"
+    assert run.state.pending_actions == [action]
+    assert run.state.completed_actions == []
+    assert run.state.pending_approval.targets == ["DELETE /users/{id}"]
+    checkpoint = store.checkpoint_path.read_text(encoding="utf-8")
+    assert '"approval_decision": null' in checkpoint
+    assert '"event": "approval_requested"' in store.trajectory_path.read_text()
+
+
+def test_human_rejection_blocks_delete_without_sending_http(monkeypatch, tmp_path):
+    catalog, plan, _ = _inputs()
+    workflow = _delete_workflow(catalog)
+    action = PlannedAction(
+        kind="workflow",
+        item_id=workflow.workflow_id,
+        priority=90,
+        reason="lifecycle cleanup",
+        estimated_requests=2,
+    )
+    store = AgentArtifactStore(tmp_path / "approval-rejected")
+    monkeypatch.setattr(
+        "api_doctor.execution.workflow_runner.execute_case",
+        lambda *args, **kwargs: pytest.fail("HTTP must not run after rejection"),
+    )
+
+    run = run_agent_actions(
+        _state(catalog, plan, [action]),
+        plan,
+        [workflow],
+        catalog,
+        _config(),
+        approval_callback=lambda request: False,
+        approval_checkpoint=store.checkpoint_approval,
+    )
+
+    assert run.state.phase == "finished"
+    assert run.state.observations[0].outcome == "blocked"
+    assert run.state.observations[0].request_count == 0
+    assert run.state.remaining_test_budget == 5
+    assert '"approved": false' in store.trajectory_path.read_text()
+
+
+def test_human_approval_is_scoped_to_one_validated_action(monkeypatch):
+    catalog, plan, _ = _inputs()
+    workflow = _delete_workflow(catalog)
+    action = PlannedAction(
+        kind="workflow",
+        item_id=workflow.workflow_id,
+        priority=90,
+        reason="lifecycle cleanup",
+        estimated_requests=2,
+    )
+
+    def fake_execute(case, policy, operation=None):
+        assert policy.approve_delete is True
+        body = {"id": 42, "name": "Ada", "email": "ada@example.test"}
+        return CaseResult(
+            case_id=case.case_id,
+            outcome="passed",
+            actual_status=case.assertions[0].allowed[0],
+            expected_statuses=case.assertions[0].allowed,
+            response_body=body if operation.operation_id == "createUser" else None,
+            request_url="http://127.0.0.1:18080" + case.request.path_template,
+        )
+
+    monkeypatch.setattr("api_doctor.execution.workflow_runner.execute_case", fake_execute)
+    run = run_agent_actions(
+        _state(catalog, plan, [action]),
+        plan,
+        [workflow],
+        catalog,
+        _config(),
+        approval_callback=lambda request: True,
+    )
+
+    assert run.state.phase == "finished"
+    assert run.state.observations[0].outcome == "passed"
+    assert run.state.approved_action_ids == {"workflow:create_delete_user"}
 
 
 def test_failure_pauses_queue_for_future_analyzer(monkeypatch):
