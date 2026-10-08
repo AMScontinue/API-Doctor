@@ -1263,6 +1263,7 @@ M1-B Schema 机械候选当前实现状态（2026-10-04）：
 - 规则引擎直接输出统一 `SemanticTestCandidate`，候选带 OpenAPI pointer 证据，不经过 LLM；
 - TestSpec 增加 `use_baseline` mutation 表示正常路径使用确定性合法基线，不伪造字段修改；
 - 负向候选只使用 OpenAPI 明确声明的 400/409/415/422 作为验证断言；无证据状态码时保留候选但标记 `not_compilable`；
+- 带必填 path 参数的资源操作不再用 Schema 合法的随机 ID 生成独立成功路径或 request-body 测试：如果没有上游资源设置，候选保留为 `not_compilable` coverage gap，避免将正常 404 误报为“期望 200”缺陷。明确修改 path 参数本身的负向测试与 404 heuristic 探针仍可独立编译；完整 Agent 成功路径由 workflow 绑定上游响应，M1 baseline 仅在 OpenAPI Links 覆盖全部必填 path 参数时保留该候选；
 - 当前边界是顶层 JSON request body；参数位置、嵌套 Schema、`oneOf/anyOf`、pattern 及合法值生成器在后续 M1 子阶段扩展。
 
 M1-C 候选编译当前实现状态（2026-10-04）：

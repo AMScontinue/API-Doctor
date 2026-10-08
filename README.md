@@ -55,6 +55,8 @@ Docker Compose 仅作为后续可选的一键复现方式。
 
 当前生成正常路径、缺失必填字段、数值边界、非法枚举、格式、字符串长度、数组约束和参数边界候选。负向场景没有 OpenAPI 声明的可依据验证状态码时，候选会保留但标记为 `not_compilable`，不猜测 400/422。对声明 404 的 GET 资源接口会生成“不存在资源”探针，但因无法仅凭契约证明任意值一定不存在，其结果明确标记为 `heuristic`。
 
+对需要必填 path ID 的资源成功路径，系统不会把“Schema 合法的随机 ID”当成“已存在资源”。独立机械候选会作为 coverage gap 保留；成功 GET/PATCH/DELETE 由 workflow 绑定创建接口的真实响应 ID，或在 deterministic baseline 中使用明确 OpenAPI Links。
+
 将可编译候选物化为确定性 HTTP 请求：
 
 ```bash

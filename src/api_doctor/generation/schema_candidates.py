@@ -8,6 +8,7 @@ from api_doctor.openapi.models import Operation, OperationCatalog
 from api_doctor.testspec.models import (
     Boundary,
     Expected,
+    Mutation,
     OmitField,
     OmitParameter,
     ParameterBoundary,
@@ -66,6 +67,65 @@ def _candidate(
         expected=Expected(status_codes=status_codes),
         source=Source(kind=source_kind, id=evidence_ref),
     )
+
+
+def _tests_path_parameter(
+    mutation: Mutation,
+) -> bool:
+    return isinstance(mutation, (SetParameter, OmitParameter, ParameterBoundary)) and (
+        mutation.location == "path"
+    )
+
+
+def _required_path_parameters(operation: Operation) -> set[str]:
+    return {
+        parameter.name
+        for parameter in operation.parameters
+        if parameter.location == "path" and parameter.required
+    }
+
+
+def _linked_path_parameters(catalog: OperationCatalog, operation: Operation) -> set[str]:
+    linked: set[str] = set()
+    for producer in catalog.operations.values():
+        for response in producer.responses:
+            for link in response.links.values():
+                if link.operation_id != operation.operation_id:
+                    continue
+                for name in link.parameters:
+                    matches = [item for item in operation.parameters if item.name == name]
+                    if len(matches) == 1 and matches[0].location == "path":
+                        linked.add(name)
+    return linked
+
+
+def _apply_setup_policy(
+    candidates: list[SemanticTestCandidate],
+    operation: Operation,
+    *,
+    linked_setup_available: bool,
+) -> list[SemanticTestCandidate]:
+    if not _required_path_parameters(operation) or linked_setup_available:
+        return candidates
+    reason = (
+        "A standalone request cannot prove that its generated path parameter "
+        "identifies an existing resource; use a setup workflow and bind the "
+        "producer response instead"
+    )
+    return [
+        candidate
+        if candidate.source.kind == "heuristic"
+        or any(_tests_path_parameter(item) for item in candidate.mutations)
+        else candidate.model_copy(
+            update={
+                "status": "not_compilable",
+                "mutations": [],
+                "expected": None,
+                "unsupported_reason": reason,
+            }
+        )
+        for candidate in candidates
+    ]
 
 
 def _invalid_enum_value(values: list[Any]) -> Any | None:
@@ -316,12 +376,17 @@ def _parameter_candidates(operation: Operation) -> Iterable[SemanticTestCandidat
             )
 
 
-def generate_schema_candidates(catalog: OperationCatalog) -> list[SemanticTestCandidate]:
+def generate_schema_candidates(
+    catalog: OperationCatalog,
+    *,
+    allow_linked_setup: bool = False,
+) -> list[SemanticTestCandidate]:
     """Generate stable candidates for supported top-level JSON request constraints."""
     candidates: list[SemanticTestCandidate] = []
     for operation in catalog.operations.values():
+        operation_candidates: list[SemanticTestCandidate] = []
         success = _declared_codes(operation, 2)
-        candidates.append(
+        operation_candidates.append(
             _candidate(
                 operation,
                 suffix="happy-path",
@@ -331,17 +396,31 @@ def generate_schema_candidates(catalog: OperationCatalog) -> list[SemanticTestCa
                 evidence_ref=f"{operation.source_pointer}/responses",
             )
         )
-        candidates.extend(_parameter_candidates(operation))
+        operation_candidates.extend(_parameter_candidates(operation))
         request_body = operation.request_body
-        if request_body is None or request_body.media_type != "application/json":
-            continue
-        schema = request_body.json_schema
-        if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
-            continue
-        required = set(schema.get("required", []))
-        for field, field_schema in schema["properties"].items():
-            if isinstance(field_schema, dict):
-                candidates.extend(
-                    _field_candidates(operation, field, field_schema, required=field in required)
-                )
+        if request_body is not None and request_body.media_type == "application/json":
+            schema = request_body.json_schema
+            if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
+                required = set(schema.get("required", []))
+                for field, field_schema in schema["properties"].items():
+                    if isinstance(field_schema, dict):
+                        operation_candidates.extend(
+                            _field_candidates(
+                                operation,
+                                field,
+                                field_schema,
+                                required=field in required,
+                            )
+                        )
+        linked_setup_available = allow_linked_setup and (
+            _required_path_parameters(operation)
+            <= _linked_path_parameters(catalog, operation)
+        )
+        candidates.extend(
+            _apply_setup_policy(
+                operation_candidates,
+                operation,
+                linked_setup_available=linked_setup_available,
+            )
+        )
     return candidates

@@ -51,8 +51,8 @@ def test_all_current_buggy_shop_schema_candidates_compile():
         if candidate.status == "compilable"
     ]
 
-    assert len(compiled) == 31
-    assert len({case.case_id for case in compiled}) == 31
+    assert len(compiled) == 25
+    assert len({case.case_id for case in compiled}) == 25
 
 
 def test_negative_candidate_has_valid_baseline_and_targeted_invalid_body():

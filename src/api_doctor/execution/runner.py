@@ -27,7 +27,7 @@ class _BaselineRunner:
             timeout_seconds=config.timeout_seconds,
         )
         self.bindings = LinkBindings(catalog)
-        generated = generate_schema_candidates(catalog)
+        generated = generate_schema_candidates(catalog, allow_linked_setup=True)
         self.candidates = self.bindings.order_candidates(generated)
         self.records: list[CaseRecord] = []
         self.compiled_count = 0

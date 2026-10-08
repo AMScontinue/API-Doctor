@@ -37,11 +37,29 @@ def test_buggy_shop_schema_generates_deterministic_candidates():
     assert enum.mutations[0].value not in {"cash", "card"}
     assert enum.expected.status_codes == [400, 422]
     assert enum.source.kind == "openapi"
-    assert candidates["schema:getUser:happy-path"].status == "compilable"
+    happy_get = candidates["schema:getUser:happy-path"]
+    assert happy_get.status == "not_compilable"
+    assert "setup workflow" in happy_get.unsupported_reason
     not_found = candidates["schema:getUser:path-id-not-found"]
     assert not_found.expected.status_codes == [404]
     assert not_found.mutations[0].kind == "set_parameter"
     assert not_found.source.kind == "heuristic"
+
+
+def test_path_dependent_mechanical_cases_require_resource_setup():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    candidates = _by_id(generate_schema_candidates(catalog))
+    linked = _by_id(generate_schema_candidates(catalog, allow_linked_setup=True))
+
+    for operation_id in ("getUser", "deleteUser", "getOrder", "updateOrderStatus"):
+        candidate = candidates[f"schema:{operation_id}:happy-path"]
+        assert candidate.status == "not_compilable"
+        assert candidate.operation_id == operation_id
+        assert "producer response" in candidate.unsupported_reason
+        assert linked[f"schema:{operation_id}:happy-path"].status == "compilable"
+
+    assert candidates["schema:getUser:path-id-not-found"].status == "compilable"
+    assert candidates["schema:createUser:happy-path"].status == "compilable"
 
 
 def test_use_baseline_candidate_is_accepted_by_existing_compiler():
