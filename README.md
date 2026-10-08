@@ -157,6 +157,17 @@ Workflow step 可选声明 `expected_status_codes`，但只能使用该 operatio
 
 当前闭环覆盖 LLM 语义候选发现、确定性测试计划构建、LLM workflow 发现与校验、LLM 初始规划、真实 HTTP 执行、Observation 分析、受限诊断、局部 replan、状态更新和最终 LLM 证据总结。`pipeline.json` 保存脱敏后的发现、校验、计划、报告分析和分阶段模型用量，`run.json` 保存执行结果，`report-analysis.json` 保存经证据引用校验的类型化总结，`report.md` 同时保留事实记录和最终分析。运行目录必须为空，程序不会覆盖已有运行。
 
+运行固定场景的端到端 Agent benchmark（会自动编译并在隔离端口启动 buggy-shop）：
+
+```bash
+.venv/bin/api-doctor benchmark \
+  --suite benchmarks/m2/suite.yaml \
+  --output runs/benchmark/local-3x \
+  --repetitions 3
+```
+
+benchmark 不让 LLM 给自己打分。确定性 scorer 直接核对真实 HTTP status、operation、Observation、诊断次数、预算和报告 evidence ref。每轮使用新服务进程重置数据，Agent 不会调用 `/test/reset`。完整原始产物位于 `runs/`，可提交的精简实测摘要位于 `benchmarks/m2/agent-benchmark-summary.json`。
+
 从 OpenAPI description 和可选业务规则中发现 Schema 机械规则无法生成的语义测试：
 
 ```bash

@@ -1456,6 +1456,14 @@ M2-F 统一 Action Executor 当前实现状态（2026-10-06）：
 
 只使用真实运行数据。10～30 个固定样例足以支撑项目阶段的面试讨论，不预先编造“准确率 90%”或“效率提升 80%”。
 
+### 22.1 M2 可重复 Agent benchmark（2026-10-08）
+
+- `api-doctor benchmark` 从类型化 YAML suite 读取固定缺陷、预算和预期信号；每轮编译同一 buggy-shop binary，使用新进程和动态本地端口隔离数据。Agent 不调用 reset endpoint，被中断运行也不会因固定端口占用污染后续轮次。
+- scorer 不调用 LLM，而是从 `AgentRun` 中核对 operation、实际/预期 status、Observation outcome 和 evidence ref；同时检查 Analyzer 决策、真实诊断 action、请求/step 预算、Planner/Report fallback。报告只有在 confirmed finding 引用了实际缺陷 Observation 时才能通过对应断言。
+- 首批 7 个场景每个重复 3 次，共 21 次真实 DeepSeek + HTTP 运行。修正两个过严的评测断言后，严格场景通过 12/21；这是当前小样本回归结果，不声称为通用准确率。无缺陷对照 3/3 无 failed/error/confirmed finding；重复邮箱与状态冲突的目标 HTTP 缺陷均 3/3 被执行并观察；后端不可达 3/3 进入 Analyzer 并产生至少一条 confirmed/possible finding。
+- benchmark 同时暴露了三个实质问题：在 20 请求预算下，Planner 3/3 漏选 invalid-email 目标、1/3 漏选 unknown-user 目标；在 5 请求紧预算下 1/3 漏选 confirm 目标，且执行了没有资源前置的 GET，将 404 当成契约失败；报告 LLM 在 21 轮中 4 次遗漏 failed/error Observation，均被确定性完整性校验拦截并回退为事实报告。这些分别对应覆盖导向规划、状态前置建模和语义报告稳定性的后续工作。
+- 21 轮合计 123 次 LLM call、690,059 prompt token 和 243,401 completion token。耗时字段在最后 9 轮加入，该子集总耗时 361.1 秒；不对前 12 轮补造耗时。可提交的事实摘要见 `benchmarks/m2/agent-benchmark-summary.json`，原始轨迹和报告保留在 gitignored `runs/benchmark/` 中。
+
 ## 23. 非目标与未来加分项
 
 MVP 非目标：

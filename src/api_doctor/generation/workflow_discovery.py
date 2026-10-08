@@ -76,6 +76,8 @@ def build_workflow_prompt(
             "Set expected_status_codes only to exact responses declared by that operation.",
             "Use repeat=once only for an evidence-backed repeated-request scenario; it permits one repeated fingerprint within the same workflow.",
             "Report uncertainty in ambiguities instead of inventing missing API behavior.",
+            "Return at most 10 workflows, ordered from highest to lowest expected information value.",
+            "When a later step intentionally recreates the same request fingerprint as an earlier step, set repeat=once; changing only an expected response does not make the request different.",
         ],
         "business_rules": [rule.model_dump(mode="json") for rule in (rules or [])],
         "runtime_expression": "Use $response.body#/field JSON Pointer expressions.",
@@ -90,8 +92,21 @@ def discover_workflows(
     rules: list[RuleRecord] | None = None,
 ) -> ModelResponse[WorkflowDiscovery]:
     """Return typed proposals only; semantic validation and execution belong to later stages."""
-    return gateway.complete(
+    response = gateway.complete(
         build_workflow_prompt(catalog, rules),
         response_model=WorkflowDiscovery,
         trace_label="workflow-discovery",
     )
+    if len(response.value.workflows) <= 10:
+        return response
+    omitted = len(response.value.workflows) - 10
+    normalized = response.value.model_copy(
+        update={
+            "workflows": response.value.workflows[:10],
+            "ambiguities": [
+                *response.value.ambiguities,
+                f"Host omitted {omitted} workflow proposal(s) beyond the limit of 10.",
+            ],
+        }
+    )
+    return ModelResponse(value=normalized, telemetry=response.telemetry)

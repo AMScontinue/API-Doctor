@@ -1,0 +1,51 @@
+{
+  "measured_at": "2026-10-08",
+  "suite": "benchmarks/m2/suite.yaml",
+  "repetitions_per_scenario": 3,
+  "total_runs": 21,
+  "strict_passed_runs_after_expectation_review": 12,
+  "strict_pass_rate": 0.5714285714,
+  "scenario_pass_rates": {
+    "clean": 1.0,
+    "invalid_email_accepted": 0.0,
+    "unknown_user_200": 0.6666666667,
+    "duplicate_email_accepted": 0.3333333333,
+    "confirm_conflict": 0.6666666667,
+    "backend_unavailable": 1.0,
+    "tight_budget_confirm": 0.3333333333
+  },
+  "observed_target_rates": {
+    "clean_without_failed_error_or_confirmed_finding": 1.0,
+    "invalid_email_accepted_signal": 0.0,
+    "unknown_user_200_signal": 0.6666666667,
+    "duplicate_email_accepted_signal": 1.0,
+    "confirm_conflict_signal": 1.0,
+    "backend_unavailable_analyzed_and_reported": 1.0,
+    "tight_budget_confirm_signal": 0.6666666667
+  },
+  "report_fallback_runs": 4,
+  "llm_usage": {
+    "calls": 123,
+    "prompt_tokens": 690059,
+    "completion_tokens": 243401
+  },
+  "timed_subset": {
+    "runs": 9,
+    "duration_seconds": 361.07152829197
+  },
+  "source_summaries": [
+    "runs/benchmark/m2-planner-coverage-3x/summary.json",
+    "runs/benchmark/m2-stateful-dynamic-3x/summary.json",
+    "runs/benchmark/m2-guardrails-dynamic-3x/summary.json"
+  ],
+  "known_issues": [
+    "Planner coverage is unstable under bounded request budgets and repeatedly misses lower-ranked semantic tests.",
+    "A standalone GET without resource setup can turn an expected missing-resource 404 into a false contract failure.",
+    "The semantic report omitted real failed/error observations in four runs; deterministic completeness validation safely used a factual fallback."
+  ],
+  "notes": [
+    "Strict results were recalculated after removing an unnecessary diagnostic-action requirement from duplicate_email_accepted.",
+    "backend_unavailable accepts either a confirmed or possible finding because transport failure does not itself prove an API contract defect.",
+    "This is a small repeated regression benchmark, not a claim of general model accuracy."
+  ]
+}

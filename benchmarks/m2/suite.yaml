@@ -1,0 +1,93 @@
+spec: ../../examples/buggy-shop/openapi.yaml
+rules: ../../examples/buggy-shop/rules.yaml
+service: buggy_shop
+service_dir: ../../examples/buggy-shop
+base_url: http://127.0.0.1:18080
+
+scenarios:
+  - id: clean
+    description: Clean reference service must not produce defect findings.
+    defects: []
+    max_tests: 20
+    max_steps: 30
+    expectations:
+      max_failed_observations: 0
+      max_error_observations: 0
+      max_confirmed_findings: 0
+
+  - id: invalid_email_accepted
+    description: Invalid email accepted by createUser must be observed and reported.
+    defects: [invalid-email-accepted]
+    max_tests: 20
+    max_steps: 30
+    expectations:
+      required_signals:
+        - operation_id: createUser
+          outcome: failed
+          actual_status: 201
+      require_confirmed_finding: true
+
+  - id: unknown_user_200
+    description: Querying a missing user returns 200 instead of the declared 404.
+    defects: [unknown-user-200]
+    max_tests: 20
+    max_steps: 30
+    expectations:
+      required_signals:
+        - operation_id: getUser
+          outcome: failed
+          actual_status: 200
+          expected_status: 404
+      require_confirmed_finding: true
+
+  - id: duplicate_email_accepted
+    description: A persisted duplicate email is accepted instead of returning 409.
+    defects: [duplicate-email-accepted]
+    max_tests: 20
+    max_steps: 30
+    expectations:
+      required_signals:
+        - operation_id: createUser
+          outcome: failed
+          actual_status: 201
+          expected_status: 409
+      min_analyzer_decisions: 1
+      require_confirmed_finding: true
+
+  - id: confirm_conflict
+    description: A valid created-to-confirmed transition incorrectly returns 409.
+    defects: [confirm-conflict]
+    max_tests: 20
+    max_steps: 30
+    expectations:
+      required_signals:
+        - operation_id: updateOrderStatus
+          outcome: failed
+          actual_status: 409
+          expected_status: 200
+      min_analyzer_decisions: 1
+      min_diagnostic_actions: 1
+      require_confirmed_finding: true
+
+  - id: backend_unavailable
+    description: Transport failure must be analyzed without a running service.
+    start_service: false
+    max_tests: 8
+    max_steps: 14
+    expectations:
+      min_analyzer_decisions: 1
+      min_reported_findings: 1
+
+  - id: tight_budget_confirm
+    description: Tight budget must not start a diagnostic that cannot be reviewed.
+    defects: [confirm-conflict]
+    max_tests: 5
+    max_steps: 7
+    expectations:
+      required_signals:
+        - operation_id: updateOrderStatus
+          outcome: failed
+          actual_status: 409
+          expected_status: 200
+      min_analyzer_decisions: 1
+      max_diagnostic_actions: 0

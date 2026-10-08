@@ -145,6 +145,18 @@ def test_unknown_report_evidence_triggers_deterministic_fallback():
     ]
 
 
+def test_omitted_failure_triggers_deterministic_fallback():
+    analysis = ReportAnalysis(executive_summary="The run completed.")
+
+    outcome = synthesize_report(_run(), *_inputs(), StubGateway(analysis))
+
+    assert outcome.result.used_fallback is True
+    assert "omits failed/error observation" in outcome.result.validation_errors[0]
+    assert outcome.result.analysis.confirmed_findings[0].evidence_refs == [
+        "trajectory:actions/1"
+    ]
+
+
 def test_provider_failure_keeps_a_deterministic_final_report():
     outcome = synthesize_report(
         _run(),

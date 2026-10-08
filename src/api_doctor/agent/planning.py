@@ -32,11 +32,15 @@ def _case_context(
         {
             "item_id": item.case.case_id,
             "operation_id": item.case.operation_id,
+            "rule_id": item.case.rule_id,
             "purpose": item.case.purpose,
             "method": item.case.request.method,
             "path": item.case.request.path_template,
             "risk": item.case.risk,
             "sources": sorted({source.source for source in item.case.assertions}),
+            "expected_status_codes": sorted(
+                {code for assertion in item.case.assertions for code in assertion.allowed}
+            ),
             "estimated_requests": 1,
         }
         for item in _available_cases(plan, delete_approved)
@@ -75,6 +79,9 @@ def build_initial_plan_prompt(
             f"Initial planning consumes one agent step, leaving at most {executable_step_budget} execution steps.",
             "Prefer workflows that unlock validated cross-operation coverage.",
             "Balance happy paths, contract negatives, and semantic business-rule tests.",
+            "Return a complete priority ranking of the supplied executable items; the host, not the model, packs the ranked prefix into the hard budgets.",
+            "Within the affordable prefix, cover distinct operations and response branches before selecting many similar boundary variants for one operation.",
+            "Give high information value to format validation, declared not-found/conflict branches, and evidence-backed business rules.",
             "DELETE actions require human approval; selection does not grant approval.",
             "Use only the provided item_id values and matching kind.",
         ],

@@ -49,5 +49,5 @@ class WorkflowCandidate(WorkflowModel):
 
 
 class WorkflowDiscovery(WorkflowModel):
-    workflows: list[WorkflowCandidate] = Field(default_factory=list, max_length=10)
+    workflows: list[WorkflowCandidate] = Field(default_factory=list)
     ambiguities: list[str] = Field(default_factory=list)

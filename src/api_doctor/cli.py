@@ -17,6 +17,10 @@ from api_doctor.cli_support import (
     write_json as _write_json,
 )
 from api_doctor.config import load_dotenv
+from api_doctor.evaluation.agent_cli import (
+    add_agent_benchmark_command,
+    run_agent_benchmark_command,
+)
 from api_doctor.execution.runner import run_baseline
 from api_doctor.execution.workflow_runner import run_workflow
 from api_doctor.generation.schema_candidates import generate_schema_candidates
@@ -88,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_workflow_command.add_argument("--approve-delete", action="store_true")
 
     add_agent_commands(commands)
+    add_agent_benchmark_command(commands)
 
     discover_tests = commands.add_parser(
         "discover-tests",
@@ -307,6 +312,9 @@ def _model_usage(response: ModelResponse) -> dict[str, int]:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.command == "benchmark":
+        run_agent_benchmark_command(args)
+        return
     catalog = load_openapi(args.spec)
 
     # The three inspection commands expose stable pipeline boundaries for debugging.

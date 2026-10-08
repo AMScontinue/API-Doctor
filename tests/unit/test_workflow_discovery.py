@@ -103,3 +103,21 @@ def test_discovery_parses_cross_step_errors_for_independent_validation():
     discovery = WorkflowDiscovery.model_validate(payload)
 
     assert discovery.workflows[0].steps[0].step_id == "get"
+
+
+def test_discovery_deterministically_limits_oversized_model_batch():
+    catalog = load_openapi(ROOT / "examples/buggy-shop/openapi.yaml")
+    discovery = _discovery()
+    workflows = [
+        discovery.workflows[0].model_copy(update={"workflow_id": f"workflow_{index}"})
+        for index in range(11)
+    ]
+    gateway = FakeGateway(discovery.model_copy(update={"workflows": workflows}))
+
+    response = discover_workflows(catalog, gateway)
+
+    assert len(response.value.workflows) == 10
+    assert response.value.workflows[-1].workflow_id == "workflow_9"
+    assert response.value.ambiguities[-1] == (
+        "Host omitted 1 workflow proposal(s) beyond the limit of 10."
+    )

@@ -122,6 +122,7 @@ def build_report_prompt(
             "Every finding must cite exact observation evidence_ref values from source_registry.",
             "A confirmed finding requires a confirmed hypothesis or a directly observed failed/error outcome.",
             "A possible finding may reference only an open hypothesis or a failed/error outcome.",
+            "Every failed or error observation must appear in at least one confirmed or possible finding; a direct contract failure does not require a hypothesis_id.",
             "A ruled-out hypothesis must reference an exact rejected hypothesis_id.",
             "Ambiguities, coverage gaps, and next steps must cite exact source_ref values from source_registry.",
             "Distinguish observed behavior from inferred root cause and state uncertainty plainly.",
@@ -306,6 +307,21 @@ def _validate_analysis(
     ):
         for item in items:
             _check_refs(item.source_refs, known_sources, errors)
+    covered_failures = {
+        ref
+        for finding in [*analysis.confirmed_findings, *analysis.possible_findings]
+        for ref in finding.evidence_refs
+    }
+    missing_failures = [
+        item.evidence_ref
+        for item in run.state.observations
+        if item.outcome in {"failed", "error"}
+        and item.evidence_ref not in covered_failures
+    ]
+    if missing_failures:
+        errors.append(
+            f"report omits failed/error observation(s) {missing_failures!r}"
+        )
     return list(dict.fromkeys(errors))
 
 
