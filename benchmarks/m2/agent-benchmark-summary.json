@@ -38,10 +38,36 @@
     "runs/benchmark/m2-stateful-dynamic-3x/summary.json",
     "runs/benchmark/m2-guardrails-dynamic-3x/summary.json"
   ],
+  "coverage_floor_followup": {
+    "source_summary": "runs/benchmark/m2-coverage-floor-final-3x/summary.json",
+    "runs": 9,
+    "strict_passed_runs": 5,
+    "previous_strict_passed_runs_for_same_scenarios": 3,
+    "target_signal_rates": {
+      "invalid_email_accepted": 0.6666666667,
+      "unknown_user_200": 1.0,
+      "tight_budget_confirm": 0.6666666667
+    },
+    "previous_target_signal_rates": {
+      "invalid_email_accepted": 0.0,
+      "unknown_user_200": 0.6666666667,
+      "tight_budget_confirm": 0.6666666667
+    },
+    "report_fallback_runs": 2,
+    "budget_violations": 0,
+    "duration_seconds": 344.15108887598035,
+    "llm_calls": 50,
+    "prompt_tokens": 269312,
+    "completion_tokens": 100078
+  },
   "known_issues": [
-    "Planner coverage is unstable under bounded request budgets and repeatedly misses lower-ranked semantic tests.",
-    "A standalone GET without resource setup can turn an expected missing-resource 404 into a false contract failure.",
+    "Finite budgets still cannot cover every operation and constraint category; one format target remained unselected in the repeated follow-up.",
+    "Planner coverage cannot select a stateful workflow that upstream LLM workflow discovery did not propose.",
     "The semantic report omitted real failed/error observations in four runs; deterministic completeness validation safely used a factual fallback."
+  ],
+  "resolved_issues": [
+    "Standalone success-path tests no longer treat a schema-valid random resource identifier as an existing resource.",
+    "Coverage-aware packing improved target selection without exceeding request or agent-step budgets."
   ],
   "notes": [
     "Strict results were recalculated after removing an unnecessary diagnostic-action requirement from duplicate_email_accepted.",

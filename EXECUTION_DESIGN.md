@@ -1382,6 +1382,8 @@ M2-E AgentState 与初始 Planner 当前实现状态（2026-10-06）：
 - 一次真实 DeepSeek Planner 在 8 请求、10 Agent step 预算下选择 1 个两步 `order_create_read` workflow 和 6 个可信单接口用例，总成本 8，引用与成本校验全部通过，无 fallback；调用 1 次、模型耗时 3,034 ms、prompt 2,827 tokens、completion 569 tokens。该数据仅对应当前保存 inventory、模型和本次运行；
 - 开发验证中的另一次真实调用里，模型文字声称成本为 8、结构化选择实际成本为 9，确定性校验成功拒绝并触发 fallback；该次临时产物后来被最终验证覆盖，因此只作为开发观察，不作为保存运行指标；
 - 预算裁剪改造后的一次真实 DeepSeek Planner 验证使用由当前 OpenAPI 重建的 31 个机械用例 inventory：在 4 请求预算下模型返回 30 个排序 action，宿主保留前 4 个、裁剪其余 26 个，可信总成本为 4，无 validation error 且未触发 fallback。该运行未启动或访问被测后端，只验证 Planner 与宿主预算边界；
+- Planner 预算装箱现加入确定性 coverage floor：LLM 仍输出可信 inventory 的完整价值排序，宿主最多使用约 3/4 执行预算保留语义约束、含后续 PUT/PATCH/DELETE 或 intentional repeat 的状态型 workflow、普通 workflow、heuristic 分支、format 验证和其他契约负向分支，并以 `(operation, category)` 作为新覆盖维度；余下预算继续严格按 LLM 原排序装箱。模型遗漏的可信 item 会以最低优先级补到排名末尾，所有提升、补入和裁剪均记入 `adjustments`；
+- 覆盖底线的冻结 3×3 真实回归中，invalid-email 目标 HTTP 信号由旧版 0/3 提升为 2/3，unknown-user 由 2/3 提升为 3/3，tight-budget confirm 保持 2/3；严格场景通过由 3/9 提升为 5/9，无预算透支。余余一次 format 漏测来自有限预算下其他 operation 的 format 候选先入选，一次 confirm 漏测来自上游 Workflow Discovery 未提出对应状态流；coverage floor 不伪造缺失 workflow，也不声称在有限预算下覆盖所有 operation×constraint。完整事实摘要记录在 `benchmarks/m2/agent-benchmark-summary.json`；
 - 后续 M2-F 已将 pending actions 接入统一执行循环，并在真实 HTTP Observation 之上加入 Analyzer 与受限的局部 replan；预算仍由 AgentState 和确定性运行时扣减，不由 LLM 自行修改。
 
 M2-F 统一 Action Executor 当前实现状态（2026-10-06）：

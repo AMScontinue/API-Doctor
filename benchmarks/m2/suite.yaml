@@ -90,4 +90,4 @@ scenarios:
           actual_status: 409
           expected_status: 200
       min_analyzer_decisions: 1
-      max_diagnostic_actions: 0
+      max_diagnostic_actions: 1

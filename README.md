@@ -159,6 +159,8 @@ Workflow step 可选声明 `expected_status_codes`，但只能使用该 operatio
 
 当前闭环覆盖 LLM 语义候选发现、确定性测试计划构建、LLM workflow 发现与校验、LLM 初始规划、真实 HTTP 执行、Observation 分析、受限诊断、局部 replan、状态更新和最终 LLM 证据总结。`pipeline.json` 保存脱敏后的发现、校验、计划、报告分析和分阶段模型用量，`run.json` 保存执行结果，`report-analysis.json` 保存经证据引用校验的类型化总结，`report.md` 同时保留事实记录和最终分析。运行目录必须为空，程序不会覆盖已有运行。
 
+Planner 的 LLM 输出是价值排序，最终预算装箱由确定性代码完成。为避免昂贵 workflow 或同类边界测试挤掉所有其他覆盖，宿主保留语义规则、状态型 workflow、format、heuristic 和契约负向等最低覆盖，再按模型原排序填充余下预算。这些调整只能引用已校验 inventory，并全部写入 planning `adjustments`。
+
 运行固定场景的端到端 Agent benchmark（会自动编译并在隔离端口启动 buggy-shop）：
 
 ```bash

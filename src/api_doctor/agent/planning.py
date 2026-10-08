@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from api_doctor.agent.models import (
     AgentState,
     InitialPlanningResult,
@@ -11,6 +13,22 @@ from api_doctor.agent.models import (
 from api_doctor.llm.gateway import ModelGateway, ModelResponse
 from api_doctor.testspec.fusion import FinalTestPlan, PlannedCase
 from api_doctor.workflows.validation import CompiledWorkflow
+
+
+@dataclass(frozen=True)
+class _Coverage:
+    category: str
+    operations: frozenset[str]
+
+
+COVERAGE_CATEGORIES = (
+    "semantic",
+    "stateful_workflow",
+    "workflow",
+    "heuristic",
+    "format",
+    "contract_negative",
+)
 
 
 def _available_cases(
@@ -135,9 +153,127 @@ def _inventory(
     return inventory
 
 
+def _coverage_inventory(
+    plan: FinalTestPlan,
+    workflows: list[CompiledWorkflow],
+    *,
+    delete_approved: bool,
+) -> dict[tuple[str, str], _Coverage]:
+    coverage: dict[tuple[str, str], _Coverage] = {}
+    for item in _available_cases(plan, delete_approved):
+        sources = {assertion.source for assertion in item.case.assertions}
+        statuses = {
+            code for assertion in item.case.assertions for code in assertion.allowed
+        }
+        if sources & {"business_rule", "openapi_description"}:
+            category = "semantic"
+        elif "heuristic" in sources:
+            category = "heuristic"
+        elif "format" in item.case.rule_id or "format" in item.case.purpose.lower():
+            category = "format"
+        elif any(code >= 400 for code in statuses):
+            category = "contract_negative"
+        else:
+            category = "success"
+        coverage[("test_case", item.case.case_id)] = _Coverage(
+            category=category,
+            operations=frozenset({item.case.operation_id}),
+        )
+    for workflow in workflows:
+        if not delete_approved and workflow.requires_approval:
+            continue
+        stateful = any(
+            step.repeat == "once" or (index > 0 and step.method in {"PUT", "PATCH", "DELETE"})
+            for index, step in enumerate(workflow.steps)
+        )
+        coverage[("workflow", workflow.workflow_id)] = _Coverage(
+            category="stateful_workflow" if stateful else "workflow",
+            operations=frozenset(step.operation_id for step in workflow.steps),
+        )
+    return coverage
+
+
+def _coverage_aware_order(
+    actions: list[PlannedAction],
+    coverage: dict[tuple[str, str], _Coverage],
+    *,
+    budget: int,
+) -> tuple[list[PlannedAction], list[str]]:
+    """Reserve most of the budget for broad coverage, then preserve model ranking."""
+    floor_budget = min(budget, max(2, (3 * budget + 3) // 4))
+    anchors: list[PlannedAction] = []
+    anchor_ids: set[tuple[str, str]] = set()
+    covered_dimensions: set[tuple[str, str]] = set()
+    spent = 0
+
+    def add(action: PlannedAction) -> bool:
+        nonlocal spent
+        identity = (action.kind, action.item_id)
+        if identity in anchor_ids or spent + action.estimated_requests > budget:
+            return False
+        anchors.append(action)
+        anchor_ids.add(identity)
+        spent += action.estimated_requests
+        covered_dimensions.update(
+            (operation, coverage[identity].category)
+            for operation in coverage[identity].operations
+        )
+        return True
+
+    for category in COVERAGE_CATEGORIES:
+        if spent >= floor_budget:
+            break
+        action = next(
+            (
+                item
+                for item in actions
+                if coverage[(item.kind, item.item_id)].category == category
+                and spent + item.estimated_requests <= budget
+            ),
+            None,
+        )
+        if action is not None:
+            add(action)
+
+    while spent < floor_budget:
+        action = next(
+            (
+                item
+                for item in actions
+                if any(
+                    (operation, coverage[(item.kind, item.item_id)].category)
+                    not in covered_dimensions
+                    for operation in coverage[(item.kind, item.item_id)].operations
+                )
+                and spent + item.estimated_requests <= budget
+            ),
+            None,
+        )
+        if action is None:
+            break
+        add(action)
+
+    ordered = anchors + [
+        action for action in actions if (action.kind, action.item_id) not in anchor_ids
+    ]
+    original_positions = {
+        (action.kind, action.item_id): index for index, action in enumerate(actions)
+    }
+    adjustments = [
+        (
+            f"promoted {action.item_id!r} to preserve "
+            f"{coverage[(action.kind, action.item_id)].category} coverage"
+        )
+        for index, action in enumerate(anchors)
+        if original_positions[(action.kind, action.item_id)] != index
+    ]
+    return ordered, adjustments
+
+
 def _prepare_proposal(
     proposal: InitialPlanProposal,
     inventory: dict[tuple[str, str], int],
+    coverage: dict[tuple[str, str], _Coverage],
     *,
     max_tests: int,
     max_steps: int,
@@ -163,7 +299,30 @@ def _prepare_proposal(
     if errors:
         return proposal, errors, adjustments
 
+    ranked = {(action.kind, action.item_id) for action in known_actions}
+    for (kind, item_id), actual_cost in inventory.items():
+        if (kind, item_id) in ranked:
+            continue
+        known_actions.append(
+            PlannedAction(
+                kind=kind,
+                item_id=item_id,
+                priority=0,
+                reason="deterministic coverage floor completed an omitted trusted ranking",
+                estimated_requests=actual_cost,
+            )
+        )
+        adjustments.append(
+            f"appended omitted trusted {kind} {item_id!r} at the end of the ranking"
+        )
+
     remaining = min(max_tests, max(max_steps - 1, 0))
+    known_actions, coverage_adjustments = _coverage_aware_order(
+        known_actions,
+        coverage,
+        budget=remaining,
+    )
+    adjustments.extend(coverage_adjustments)
     selected: list[PlannedAction] = []
     for action in known_actions:
         if action.estimated_requests <= remaining:
@@ -236,6 +395,7 @@ def initialize_agent_state(
     prepared, errors, adjustments = _prepare_proposal(
         proposed_plan,
         _inventory(plan, workflows, delete_approved=delete_approved),
+        _coverage_inventory(plan, workflows, delete_approved=delete_approved),
         max_tests=max_tests,
         max_steps=max_steps,
     )

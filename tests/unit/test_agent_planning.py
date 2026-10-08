@@ -217,9 +217,152 @@ def test_budget_packing_skips_large_action_and_keeps_later_fitting_action():
     assert result.used_fallback is False
     assert [item.item_id for item in result.state.pending_actions] == [case_id]
     assert result.state.strategy == proposal.strategy
-    assert result.adjustments == [
-        "omitted 'create_read_user': trusted cost 2 exceeds remaining execution budget 1"
+    assert any("heuristic coverage" in item for item in result.adjustments)
+    assert any("omitted 'create_read_user'" in item for item in result.adjustments)
+
+
+def test_coverage_floor_promotes_semantic_and_workflow_actions():
+    catalog, plan, workflows = _inputs()
+    heuristic = next(
+        item
+        for item in plan.cases
+        if any(assertion.source == "heuristic" for assertion in item.case.assertions)
+    )
+    semantic = heuristic.model_copy(
+        deep=True,
+        update={
+            "case": heuristic.case.model_copy(
+                deep=True,
+                update={
+                    "case_id": "semantic-case",
+                    "rule_id": "unique-user-email",
+                    "assertions": [
+                        heuristic.case.assertions[0].model_copy(
+                            update={"source": "business_rule", "allowed": [409]}
+                        )
+                    ],
+                },
+            )
+        },
+    )
+    guarded_plan = plan.model_copy(update={"cases": [heuristic, semantic]})
+    second_workflow = workflows[0].model_copy(
+        deep=True,
+        update={
+            "workflow_id": "second-workflow",
+            "steps": [
+                workflows[0].steps[0],
+                workflows[0].steps[1].model_copy(update={"method": "PATCH"}),
+            ],
+        },
+    )
+    proposal = InitialPlanProposal(
+        strategy="rank workflows before compact branches",
+        selected=[
+            _proposal().selected[0],
+            _proposal(item_id="second-workflow").selected[0],
+            {
+                "kind": "test_case",
+                "item_id": "semantic-case",
+                "priority": 70,
+                "reason": "semantic rule",
+                "estimated_requests": 1,
+            },
+            {
+                "kind": "test_case",
+                "item_id": heuristic.case.case_id,
+                "priority": 60,
+                "reason": "declared branch",
+                "estimated_requests": 1,
+            },
+        ],
+    )
+
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=guarded_plan,
+        workflows=[workflows[0], second_workflow],
+        proposed_plan=proposal,
+        max_tests=4,
+        max_steps=5,
+    )
+
+    assert [item.item_id for item in result.state.pending_actions] == [
+        "semantic-case",
+        "second-workflow",
+        heuristic.case.case_id,
     ]
+    assert any("semantic coverage" in item for item in result.adjustments)
+
+
+def test_coverage_floor_can_use_a_trusted_item_omitted_from_model_ranking():
+    catalog, plan, workflows = _inputs()
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=plan,
+        workflows=workflows,
+        proposed_plan=_proposal(),
+        max_tests=3,
+        max_steps=4,
+    )
+
+    assert result.state.pending_actions[0].item_id == "create_read_user"
+    assert len(result.state.pending_actions) == 2
+    assert any("appended omitted trusted test_case" in item for item in result.adjustments)
+
+
+def test_coverage_floor_prefers_a_new_operation_within_reserved_budget():
+    catalog, plan, _ = _inputs()
+    original = next(
+        item
+        for item in plan.cases
+        if all(assertion.source == "openapi" for assertion in item.case.assertions)
+    )
+    cases = []
+    for case_id, operation_id in (
+        ("same-operation-a", "createUser"),
+        ("same-operation-b", "createUser"),
+        ("new-operation", "getUser"),
+    ):
+        cases.append(
+            original.model_copy(
+                deep=True,
+                update={
+                    "case": original.case.model_copy(
+                        update={"case_id": case_id, "operation_id": operation_id}
+                    )
+                },
+            )
+        )
+    diverse_plan = plan.model_copy(update={"cases": cases})
+    proposal = InitialPlanProposal(
+        strategy="rank similar cases first",
+        selected=[
+            {
+                "kind": "test_case",
+                "item_id": item.case.case_id,
+                "priority": 90 - index,
+                "reason": "model ranking",
+                "estimated_requests": 1,
+            }
+            for index, item in enumerate(cases)
+        ],
+    )
+
+    result = initialize_agent_state(
+        spec_fingerprint=catalog.fingerprint,
+        plan=diverse_plan,
+        workflows=[],
+        proposed_plan=proposal,
+        max_tests=2,
+        max_steps=3,
+    )
+
+    assert [item.item_id for item in result.state.pending_actions] == [
+        "same-operation-a",
+        "new-operation",
+    ]
+    assert any("new-operation" in item for item in result.adjustments)
 
 
 def test_unapproved_delete_workflow_is_absent_from_inventory_and_fallback():
